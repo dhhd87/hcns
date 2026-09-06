@@ -267,13 +267,13 @@ function doPost(e) {
  * (popup chuẩn) ngay trong trình soạn thảo, thay vì để nó tự bật lên qua
  * link /exec (dễ vỡ do CSP/extension chặn, gây lỗi "Unexpected identifier $").
  * Cách dùng: Lưu file -> ở thanh trên trình soạn thảo chọn hàm
- * "authorizeDriveAccess_" trong dropdown -> bấm nút ▶ Chạy -> một popup xin
+ * "authorizeDriveAccess" trong dropdown -> bấm nút ▶ Chạy -> một popup xin
  * quyền hiện ra -> chọn tài khoản -> nếu thấy "Ứng dụng chưa xác minh" thì
  * bấm "Nâng cao" (Advanced) -> "Đi tới ... (không an toàn)" -> "Cho phép".
  * Sau khi chạy xong (Log hiện dòng "OK - đã cấp quyền Drive"), có thể xoá
  * hàm này đi rồi Triển khai -> Quản lý triển khai -> Sửa -> Phiên bản mới.
  */
-function authorizeDriveAccess_() {
+function _authorizeDriveAccess() {
   const folder = DriveApp.getFolderById(UPLOAD_FOLDER_ID);
   Logger.log('OK - đã cấp quyền Drive, thư mục: ' + folder.getName());
 }
