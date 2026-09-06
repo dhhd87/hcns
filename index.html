@@ -161,6 +161,8 @@
     background:var(--moss);border-bottom:1px solid var(--line);
     white-space:nowrap;
   }
+  thead th.th-sortable{cursor:pointer;user-select:none;}
+  thead th.th-sortable:hover{color:var(--sage-deep);}
   tbody td{
     padding:11px 16px;border-bottom:1px solid #ECEBDD;
     font-size:13.3px;color:var(--ink);vertical-align:top;
@@ -469,7 +471,9 @@
       <div class="brand-sub">Hành chính · Nhân sự</div>
     </div>
     <nav class="nav" id="nav"></nav>
-    <div class="sidebar-foot">Đồng bộ trực tiếp với Google Sheet nội bộ</div>
+    <div class="sidebar-foot">Đồng bộ trực tiếp với Google Sheet nội bộ
+      <div style="margin-top:6px;"><a href="javascript:void(0)" onclick="promptEditPassword('Nhập mật khẩu chỉnh sửa (để trống nếu không cần):')" style="color:#B9C6B3;text-decoration:underline;">Đặt/đổi mật khẩu chỉnh sửa</a></div>
+    </div>
   </aside>
   <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
 
@@ -831,106 +835,117 @@ let editingId = null;      // id (pipe-joined) khi sửa, null khi thêm mới
 let pendingDelete = null;
 let activeFilter = null;   // {label, predicate} khi drill-down từ Tổng quan
 let quickFilters = {};     // { fieldName: selectedValue } - bộ lọc nhanh theo cột trên mỗi danh sách
+let sortState = {};        // { sheetName: { field, dir:"asc"|"desc" } } - sắp xếp theo cột trên mỗi danh sách
 
-/* ---------- gọi API bằng kỹ thuật JSONP (né lỗi CORS khi mở file bằng double-click) ----------
-   Khi mở index.html trực tiếp từ ổ đĩa (file://), trình duyệt gắn origin "null"
-   cho fetch()/XMLHttpRequest, và Google chặn hẳn CORS với origin null ở tầng
-   hạ tầng (không cách nào cấu hình Apps Script để cho qua). Thẻ <script src="...">
-   thì không bị luật CORS áp dụng, nên dùng nó để gọi API xuyên origin — đây là
-   kỹ thuật JSONP truyền thống. Toàn bộ gọi đọc/ghi dữ liệu trong app đều đi qua
-   hàm này, nhờ vậy chạy được cả khi double-click mở file lẫn khi truy cập qua
-   link /exec đã triển khai. */
-let _jsonpSeq = 0;
-function jsonpRequest(params, timeoutMs){
-  return new Promise((resolve, reject)=>{
-    // Kiểm tra an toàn: nếu API_URL bị hỏng (rỗng, thiếu http/https — vd do dán
-    // nhầm font chữ khiến dấu ngoặc kép bị đổi thành kiểu " " cong, hoặc dán
-    // qua Word/Notion làm lệch chuỗi), báo lỗi rõ ràng ngay lập tức thay vì để
-    // trình duyệt tự nạp URL rỗng/tương đối -> vô tình trỏ về chính trang hiện
-    // tại và bị chặn với lỗi khó hiểu "'file:' URLs are treated as unique
-    // security origins".
-    if(!API_URL || !/^https?:\/\//i.test(API_URL)){
-      const err = new Error("API_URL đang bị lỗi/rỗng (kiểm tra lại dòng const API_URL ở đầu file — có thể dấu ngoặc kép bị đổi kiểu khi dán qua Word/Notion). Vui lòng dán lại nguyên văn link /exec bằng dấu ngoặc kép thẳng \" \", không dùng dấu ngoặc kép cong “ ”.");
-      err.isNetworkError = true;
-      reject(err);
-      return;
-    }
-    const cbName = "__hcns_jsonp_cb_" + (_jsonpSeq++) + "_" + Date.now();
-    const script = document.createElement("script");
-    let done = false;
-    const timer = setTimeout(()=>{
-      if(done) return;
-      done = true;
-      cleanup();
-      reject(new Error("Yêu cầu quá thời gian chờ (server không phản hồi). Vui lòng thử lại."));
-    }, timeoutMs || 25000);
-    function cleanup(){
-      clearTimeout(timer);
-      delete window[cbName];
-      script.remove();
-    }
-    window[cbName] = (data)=>{
-      if(done) return;
-      done = true;
-      cleanup();
-      resolve(data);
-    };
-    const qs = Object.entries({ ...params, callback: cbName })
-      .filter(([,v])=> v!=null)
-      .map(([k,v])=> `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
-      .join("&");
-    const fullUrl = `${API_URL}?${qs}`;
-    // Kiểm tra lại lần cuối bằng chính đối tượng URL của trình duyệt: nếu vì lý
-    // do nào đó fullUrl không phải URL tuyệt đối hợp lệ, chặn lại ngay ở đây,
-    // không cho gán vào script.src (nguồn gốc trực tiếp của lỗi "file://" ở trên).
-    let parsed;
-    try{ parsed = new URL(fullUrl); }catch(urlErr){ parsed = null; }
-    if(!parsed || !/^https?:$/.test(parsed.protocol)){
-      const err = new Error("Đường dẫn gọi API không hợp lệ: " + fullUrl);
-      err.isNetworkError = true;
-      reject(err);
-      return;
-    }
-    script.src = fullUrl;
-    script.onerror = ()=>{
-      if(done) return;
-      done = true;
-      cleanup();
-      const err = new Error("Không kết nối được tới máy chủ (không tải được script). Kiểm tra: (1) đường link API_URL đã đúng bản triển khai mới nhất, (2) quyền truy cập deployment là \"Bất kỳ ai\", (3) kết nối mạng.");
-      err.isNetworkError = true;
-      reject(err);
-    };
-    document.head.appendChild(script);
-  });
+/* ---------- gọi API bằng fetch() ----------
+   TRƯỚC ĐÂY: dùng JSONP (thẻ <script src="...">) để né lỗi CORS khi mở file
+   index.html trực tiếp bằng double-click (file://). NAY: Apps Script tự phục
+   vụ luôn cả giao diện này (deploy /exec), nên trang web và API cùng 1 origin
+   — không còn lý do kỹ thuật nào để dùng JSONP nữa. fetch() cho code gọn hơn,
+   báo lỗi mạng/HTTP rõ ràng hơn và không phải chờ hết timeout 15-25s mới biết
+   là lỗi. (Nếu ai đó vẫn mở file bằng double-click, app sẽ báo lỗi kết nối rõ
+   ràng ngay, thay vì âm thầm treo.) */
+function apiUrlOk(){ return API_URL && /^https?:\/\//i.test(API_URL); }
+
+async function apiGet(action, params, timeoutMs){
+  if(!apiUrlOk()){
+    const err = new Error("API_URL đang bị lỗi/rỗng (kiểm tra lại dòng const API_URL ở đầu file). Vui lòng dán lại nguyên văn link /exec.");
+    err.isNetworkError = true;
+    throw err;
+  }
+  const qs = Object.entries({ ...params, action })
+    .filter(([,v])=> v!=null)
+    .map(([k,v])=> `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+    .join("&");
+  const controller = new AbortController();
+  const timer = setTimeout(()=>controller.abort(), timeoutMs || 25000);
+  let resp;
+  try{
+    resp = await fetch(`${API_URL}?${qs}`, { method:"GET", signal: controller.signal });
+  }catch(e){
+    const err = new Error(e.name === "AbortError"
+      ? "Yêu cầu quá thời gian chờ (server không phản hồi). Vui lòng thử lại."
+      : "Không kết nối được tới máy chủ. Kiểm tra: (1) đường link API_URL đã đúng bản triển khai mới nhất, (2) quyền truy cập deployment là \"Bất kỳ ai\", (3) kết nối mạng.");
+    err.isNetworkError = true;
+    throw err;
+  }finally{ clearTimeout(timer); }
+  if(!resp.ok){
+    const err = new Error("Máy chủ trả về lỗi HTTP " + resp.status);
+    err.isNetworkError = true;
+    throw err;
+  }
+  return resp.json();
+}
+
+async function apiPost(body, timeoutMs){
+  if(!apiUrlOk()){
+    const err = new Error("API_URL đang bị lỗi/rỗng (kiểm tra lại dòng const API_URL ở đầu file).");
+    err.isNetworkError = true;
+    throw err;
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(()=>controller.abort(), timeoutMs || 25000);
+  let resp;
+  try{
+    resp = await fetch(API_URL, { method:"POST", body: JSON.stringify(body), signal: controller.signal });
+  }catch(e){
+    const err = new Error(e.name === "AbortError"
+      ? "Yêu cầu quá thời gian chờ (server không phản hồi). Vui lòng thử lại."
+      : "Không kết nối được tới máy chủ. Kiểm tra kết nối mạng và bản triển khai deployment.");
+    err.isNetworkError = true;
+    throw err;
+  }finally{ clearTimeout(timer); }
+  if(!resp.ok){
+    const err = new Error("Máy chủ trả về lỗi HTTP " + resp.status);
+    err.isNetworkError = true;
+    throw err;
+  }
+  return resp.json();
+}
+
+/* ---------- mật khẩu chỉnh sửa (phân quyền xem / sửa đơn giản) ----------
+   Nếu quản trị viên đã đặt EDIT_PASSWORD ở phía Code.gs, mọi thao tác
+   Thêm/Sửa/Xoá/Tải ảnh sẽ bị máy chủ từ chối (authError:true) cho tới khi
+   người dùng nhập đúng mật khẩu. Mật khẩu được hỏi 1 lần, lưu tạm trong
+   sessionStorage (mất khi đóng tab) và tự đính kèm vào mọi yêu cầu ghi. */
+function getEditPassword(){ return sessionStorage.getItem("hcns_edit_pw") || ""; }
+function setEditPassword(pw){ sessionStorage.setItem("hcns_edit_pw", pw || ""); }
+function promptEditPassword(message){
+  const pw = window.prompt(message || "Khu vực này yêu cầu mật khẩu chỉnh sửa. Vui lòng nhập mật khẩu:");
+  if(pw != null) setEditPassword(pw.trim());
+  return pw != null;
 }
 
 /* ---------- helpers gọi API ---------- */
 async function apiList(sheet){
   if(dataCache[sheet]) return dataCache[sheet];
-  const json = await jsonpRequest({ action:"list", sheet });
+  const json = await apiGet("list", { sheet });
   if(!json.success) throw new Error(json.message || "Lỗi tải dữ liệu");
   dataCache[sheet] = json.data;
   return json.data;
 }
-/* apiFetchNextCode: dùng chung cho form thêm mới & thêm lịch sử công cụ, thay
-   cho fetch() trực tiếp trước đây (bị chặn CORS khi mở file bằng double-click). */
 async function apiFetchNextCode(sheet){
   try{
-    const json = await jsonpRequest({ action:"nextcode", sheet });
+    const json = await apiGet("nextcode", { sheet });
     return (json.success && json.data && json.data.code) ? json.data.code : null;
   }catch(e){ return null; }
 }
-/* apiWriteRemote: gọi tới Apps Script bằng JSONP (qua GET), có timeout + phân biệt rõ 2 loại lỗi:
-   - Lỗi MẠNG (không tới được server: sai URL, chưa deploy, mất mạng...)
-     -> ném Error có .isNetworkError = true, kèm gợi ý kiểm tra deployment.
-   - Lỗi LOGIC (server phản hồi nhưng success:false, vd trùng mã, thiếu dữ liệu)
-     -> ném Error thường với message tiếng Việt từ Code.gs. */
-async function apiWriteRemote(action, sheet, payload, _retryCount){
-  const params = { action, sheet };
-  if(payload && payload.id != null) params.id = payload.id;
-  if(payload && payload.data != null) params.data = JSON.stringify(payload.data);
-  const json = await jsonpRequest(params);
-  if(!json.success) throw new Error(json.message || "Thao tác thất bại");
+/* apiWriteRemote: gọi tới Apps Script bằng POST JSON (create/update/delete).
+   - Lỗi MẠNG (không tới được server) -> ném Error có .isNetworkError = true.
+   - Lỗi mật khẩu (authError) -> hỏi lại mật khẩu 1 lần rồi tự thử lại.
+   - Lỗi LOGIC khác (trùng mã, dữ liệu không hợp lệ...) -> ném Error thường. */
+async function apiWriteRemote(action, sheet, payload, _isRetry){
+  const body = { action, sheet, editPassword: getEditPassword() };
+  if(payload && payload.id != null) body.id = payload.id;
+  if(payload && payload.data != null) body.data = payload.data;
+  const json = await apiPost(body);
+  if(!json.success){
+    if(json.authError && !_isRetry){
+      const entered = promptEditPassword(json.message);
+      if(entered) return apiWriteRemote(action, sheet, payload, true);
+    }
+    throw new Error(json.message || "Thao tác thất bại");
+  }
   return json;
 }
 
@@ -1224,6 +1239,40 @@ async function applyFilter(rows){
   filtered = !q ? base : base.filter(r =>
     Object.values(r).some(v => v!=null && String(v).toLowerCase().includes(q))
   );
+  applySort();
+  renderTable();
+}
+
+/* ---------- sắp xếp cột trên bảng danh sách ---------- */
+function applySort(){
+  const s = sortState[currentSheet];
+  if(!s || !s.field) return;
+  const { field, dir } = s;
+  const mul = dir === "desc" ? -1 : 1;
+  filtered = filtered.slice().sort((a,b)=>{
+    let va = a[field], vb = b[field];
+    // ngày dd/mm/yyyy -> so theo giá trị thời gian thực, số -> so theo số,
+    // còn lại so theo chuỗi (không phân biệt hoa/thường)
+    if(DATE_FIELDS_HINT(field)){
+      va = vnToIso(va) || ""; vb = vnToIso(vb) || "";
+    }else if(NUMBER_FIELDS.has(field)){
+      const na = Number(String(va ?? "").replace(/[^\d.-]/g,"")), nb = Number(String(vb ?? "").replace(/[^\d.-]/g,""));
+      if(!isNaN(na) && !isNaN(nb)){ va = na; vb = nb; }
+    }
+    if(va == null || va === "") return 1;
+    if(vb == null || vb === "") return -1;
+    if(va < vb) return -1 * mul;
+    if(va > vb) return 1 * mul;
+    return 0;
+  });
+}
+function toggleSort(field){
+  const cur = sortState[currentSheet];
+  let dir = "asc";
+  if(cur && cur.field === field) dir = cur.dir === "asc" ? "desc" : (cur.dir === "desc" ? null : "asc");
+  sortState[currentSheet] = dir ? { field, dir } : null;
+  applySort();
+  page = 1;
   renderTable();
 }
 
@@ -1400,7 +1449,12 @@ async function renderTable(){
     }
   }
 
-  const theadHtml = `<tr>${cfg.table.map(f=>`<th>${L(f, currentSheet)}</th>`).join("")}${cfg.hasDetail?'<th></th>':''}<th></th></tr>`;
+  const curSort = sortState[currentSheet];
+  const theadHtml = `<tr>${cfg.table.map(f=>{
+    const active = curSort && curSort.field === f;
+    const arrow = active ? (curSort.dir === "asc" ? " ▲" : " ▼") : "";
+    return `<th class="th-sortable" onclick="toggleSort('${f}')" title="Bấm để sắp xếp">${L(f, currentSheet)}${arrow}</th>`;
+  }).join("")}${cfg.hasDetail?'<th></th>':''}<th></th></tr>`;
   const rowsHtml = pageRows.map(row=>{
     const cells = cfg.table.map(f=>{
       let val;
@@ -1559,17 +1613,17 @@ function resizeImageForUpload(file, maxDim, quality){
     reader.readAsDataURL(file);
   });
 }
-async function apiUploadImage(file){
+async function apiUploadImage(file, _isRetry){
   const resized = await resizeImageForUpload(file);
   const base64 = await fileToBase64(resized);
-  let resp;
-  try{
-    resp = await fetch(API_URL, { method:"POST", body: JSON.stringify({ action:"uploadimage", filename: resized.name, mimeType: resized.type, base64 }) });
-  }catch(e){
-    throw new Error("Không gửi được ảnh lên máy chủ (chỉ tải ảnh lên được khi mở app qua link /exec đã triển khai, không phải mở file trực tiếp).");
+  const json = await apiPost({ action:"uploadimage", filename: resized.name, mimeType: resized.type, base64, editPassword: getEditPassword() });
+  if(!json.success){
+    if(json.authError && !_isRetry){
+      const entered = promptEditPassword(json.message);
+      if(entered) return apiUploadImage(file, true);
+    }
+    throw new Error(json.message || "Tải ảnh lên thất bại");
   }
-  const json = await resp.json();
-  if(!json.success) throw new Error(json.message || "Tải ảnh lên thất bại");
   return json.data;
 }
 /* HTML cho 1 khối "trường ảnh": preview + 2 nút (chọn ảnh / chụp ảnh) + ô
@@ -1710,6 +1764,35 @@ async function openForm(id){
   positionFullOverlay("formOverlay");
 }
 
+/* ---------- validate dữ liệu trước khi lưu (khớp với kiểm tra phía server ở
+   Code.gs, giúp báo lỗi ngay tại chỗ thay vì phải chờ round-trip lên server) ---------- */
+const EMAIL_REGEX_FE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PHONE_REGEX_FE = /^(0\d{9,10}|\+84\d{9,10})$/;
+function validateRecordData(data){
+  const errors = [];
+  if(data.email != null && String(data.email).trim() !== "" && !EMAIL_REGEX_FE.test(String(data.email).trim())){
+    errors.push("Email không đúng định dạng: " + data.email);
+  }
+  if(data.phone != null && String(data.phone).trim() !== "" && !PHONE_REGEX_FE.test(String(data.phone).trim().replace(/[.\s-]/g,""))){
+    errors.push("Số điện thoại không hợp lệ (vd 0912345678): " + data.phone);
+  }
+  const DATE_PAIRS = [
+    ["ngay_thu_viec","ngay_chinh_thuc","Ngày chính thức phải từ sau Ngày thử việc trở đi"],
+    ["ngay_thu_viec","ngay_nghi_viec","Ngày nghỉ việc phải từ sau Ngày thử việc trở đi"],
+    ["ngay_nhan","ngay_sua","Ngày sửa phải từ sau Ngày nhận trở đi"]
+  ];
+  DATE_PAIRS.forEach(([fA,fB,msg])=>{
+    if(!data[fA] || !data[fB]) return;
+    const dA = new Date(vnToIso(data[fA])), dB = new Date(vnToIso(data[fB]));
+    if(!isNaN(dA) && !isNaN(dB) && dB < dA) errors.push(msg);
+  });
+  if(data.chi_phi_sua != null && String(data.chi_phi_sua).trim() !== ""){
+    const n = Number(String(data.chi_phi_sua).replace(/[^\d.-]/g,""));
+    if(isNaN(n) || n < 0) errors.push("Chi phí sửa phải là một số không âm");
+  }
+  return errors;
+}
+
 function collectFormData(){
   const body = document.getElementById("formBody");
   const data = {};
@@ -1731,6 +1814,8 @@ function doFormSave(){
   const data = collectFormData();
   const missingPk = cfg.pk.filter(f=>!data[f]);
   if(missingPk.length){ toast(`Vui lòng nhập ${missingPk.map(f=>L(f, sheet)).join(", ")}`, true); return; }
+  const errors = validateRecordData(data);
+  if(errors.length){ toast(errors.join(" · "), true); return; }
 
   const id = editingId;
   const isUpdate = !!editingId;
@@ -1769,6 +1854,51 @@ function doConfirmDelete(){
   toast("Đã xoá (đang đồng bộ ngầm…)");
   refreshCounts();
   if(currentSheet===sheet) loadTable();
+}
+
+/* ---------- biểu đồ xu hướng theo tháng (SVG thuần, không cần thư viện) ---------- */
+function last12MonthKeys(){
+  const out = [];
+  const now = new Date();
+  for(let i=11; i>=0; i--){
+    const d = new Date(now.getFullYear(), now.getMonth()-i, 1);
+    out.push(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`);
+  }
+  return out;
+}
+function vnDateMonthKey(v){
+  const m = String(v||"").trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if(!m) return null;
+  return `${m[3]}-${m[2].padStart(2,"0")}`;
+}
+/* Vẽ 1..n đường (line chart) đơn giản trên cùng 1 trục thời gian (12 tháng),
+   tự co giãn theo giá trị lớn nhất trong TẤT CẢ series để so sánh được. */
+function sparklineSvg(monthKeys, series, fmt){
+  fmt = fmt || (v=>v);
+  const W = 760, H = 190, padL = 44, padR = 16, padT = 14, padB = 26;
+  const innerW = W - padL - padR, innerH = H - padT - padB;
+  const maxVal = Math.max(1, ...series.flatMap(s=>s.values));
+  const x = i => padL + (monthKeys.length<=1 ? innerW/2 : (i/(monthKeys.length-1))*innerW);
+  const y = v => padT + innerH - (v/maxVal)*innerH;
+  const gridLines = [0,0.25,0.5,0.75,1].map(t=>{
+    const yy = padT + innerH*(1-t);
+    return `<line x1="${padL}" y1="${yy}" x2="${W-padR}" y2="${yy}" stroke="#ECEBDD" stroke-width="1"/>
+      <text x="${padL-8}" y="${yy+4}" font-size="10" fill="#9AA391" text-anchor="end">${fmt(Math.round(maxVal*t))}</text>`;
+  }).join("");
+  const xLabels = monthKeys.map((mk,i)=>{
+    if(monthKeys.length>6 && i%2===1) return ""; // đỡ chật khi có nhiều tháng
+    const [yy,mm] = mk.split("-");
+    return `<text x="${x(i)}" y="${H-6}" font-size="10" fill="#9AA391" text-anchor="middle">${mm}/${yy.slice(2)}</text>`;
+  }).join("");
+  const paths = series.map(s=>{
+    const d = s.values.map((v,i)=> (i===0?"M":"L") + x(i).toFixed(1) + "," + y(v).toFixed(1)).join(" ");
+    const dots = s.values.map((v,i)=>`<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="3" fill="${s.color}"><title>${monthKeys[i]}: ${fmt(v)}</title></circle>`).join("");
+    return `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2.2"/>${dots}`;
+  }).join("");
+  const legend = series.length>1 ? `<div style="display:flex;gap:16px;margin-top:6px;flex-wrap:wrap;">
+    ${series.map(s=>`<span style="font-size:11.5px;color:#5D6B57;"><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${s.color};margin-right:5px;"></span>${s.name}</span>`).join("")}
+  </div>` : "";
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:100%;height:auto;display:block;">${gridLines}${xLabels}${paths}</svg>${legend}`;
 }
 
 /* ---------- Tổng quan (dashboard) ---------- */
@@ -1833,6 +1963,14 @@ async function renderOverview(forceReload){
   const dangLamViec = nvRows.filter(nv => String(nv.tinh_trang||"").toLowerCase().includes("đang")).length || nvRows.length;
   const tongChiPhiSua = hisRows.reduce((s,h)=> s + (Number(String(h.chi_phi_sua||"").replace(/[^\d.-]/g,""))||0), 0);
 
+  // ---- xu hướng theo tháng (12 tháng gần nhất): chi phí sửa chữa & biến động nhân sự ----
+  const monthKeys = last12MonthKeys();
+  const chiPhiByMonth = monthKeys.map(mk => hisRows
+    .filter(h => vnDateMonthKey(h.ngay_sua) === mk)
+    .reduce((s,h)=> s + (Number(String(h.chi_phi_sua||"").replace(/[^\d.-]/g,""))||0), 0));
+  const vaoByMonth = monthKeys.map(mk => nvRows.filter(nv => vnDateMonthKey(nv.ngay_thu_viec) === mk).length);
+  const raByMonth = monthKeys.map(mk => nvRows.filter(nv => vnDateMonthKey(nv.ngay_nghi_viec) === mk).length);
+
   document.getElementById("ovContent").innerHTML = `
     <div class="ov-kpis">
       <div class="ov-kpi" style="cursor:pointer;" onclick="filterNhanVienDangLamViec()" title="Xem danh sách nhân sự">
@@ -1857,6 +1995,17 @@ async function renderOverview(forceReload){
       <div class="ov-card-head"><h3>Công cụ có nhiều lịch sử công cụ nhất</h3><span>Bấm để xem chi tiết & lịch sử công cụ</span></div>
       ${topHis.map(([k,v]) => barRow(k, v, maxHis, `openRecordPanelHistory('${escAttr(k)}')`)).join("") || '<p class="muted">Chưa có lịch sử công cụ</p>'}
     </div>
+    <div class="ov-card" style="grid-column:1/-1;">
+      <div class="ov-card-head"><h3>Chi phí sửa chữa theo tháng (12 tháng gần nhất)</h3><span>Tổng chi phí sửa chữa công cụ dụng cụ mỗi tháng</span></div>
+      ${sparklineSvg(monthKeys, [{ name:"Chi phí sửa (VNĐ)", values: chiPhiByMonth, color:"var(--clay)" }], formatNumber)}
+    </div>
+    <div class="ov-card" style="grid-column:1/-1;">
+      <div class="ov-card-head"><h3>Biến động nhân sự theo tháng (12 tháng gần nhất)</h3><span>Số lượt vào làm và nghỉ việc mỗi tháng</span></div>
+      ${sparklineSvg(monthKeys, [
+        { name:"Vào làm", values: vaoByMonth, color:"var(--sage-deep)" },
+        { name:"Nghỉ việc", values: raByMonth, color:"var(--clay)" }
+      ])}
+    </div>
   </div>`;
 
   const icon = document.getElementById("ovRefreshIcon");
@@ -1870,35 +2019,47 @@ let bbRows = [];
 let bbRowSeq = 0;
 let bbPickTargetRow = null;
 
+let bbEditingMa = null; // mã biên bản đang mở lại để sửa/in (null = biên bản mới, chưa lưu)
+
 async function renderBienBan(){
   const wrap = document.getElementById("tableWrap");
   document.getElementById("rowInfo").textContent = "";
   document.getElementById("pager").innerHTML = "";
   bbRows = [];
   bbRowSeq = 0;
+  bbEditingMa = null;
   const today = new Date().toISOString().slice(0,10);
   wrap.innerHTML = `
     <div class="bb-actions">
+      <button class="btn btn-ghost btn-sm" id="bbListBtn">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v4h4"/></svg>
+        Biên bản đã lưu
+      </button>
+      <button class="btn btn-ghost btn-sm" id="bbSaveBtn">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>
+        Lưu biên bản
+      </button>
       <button class="btn btn-primary btn-sm" id="bbPrintBtn">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 9V3h12v6M6 18H4a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1h16a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-2M6 14h12v7H6z"/></svg>
         In biên bản
       </button>
     </div>
-    <div class="bb-doc">
+    <div id="bbSavedListWrap"></div>
+    <div class="bb-doc" id="bbDocWrap">
       <div class="bb-head-grid">
         <div class="bb-head-left">
-          CÔNG TY / ĐƠN VỊ: <input class="bb-input-line" style="width:190px" placeholder="............................."><br>
-          <span style="color:#8B9583;">Đơn vị sử dụng tài sản: <input class="bb-input-line" style="width:150px" placeholder="..................."></span>
+          CÔNG TY / ĐƠN VỊ: <input class="bb-input-line" id="bbCongTy" style="width:190px" placeholder="............................."><br>
+          <span style="color:#8B9583;">Đơn vị sử dụng tài sản: <input class="bb-input-line" id="bbDonViSuDung" style="width:150px" placeholder="..................."></span>
         </div>
         <div class="bb-head-right">
           <b>CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM</b><br>
           <b>Độc lập - Tự do - Hạnh phúc</b><br>
-          <span style="font-style:italic;color:#5D6B57;">Hà Nội, ngày <input class="bb-input-line" style="width:26px;text-align:center;" placeholder="....">
-          tháng <input class="bb-input-line" style="width:26px;text-align:center;" placeholder="....">
-          năm <input class="bb-input-line" style="width:42px;text-align:center;" placeholder="......"></span>
+          <span style="font-style:italic;color:#5D6B57;">Hà Nội, ngày <input class="bb-input-line" id="bbNgay" style="width:26px;text-align:center;" placeholder="....">
+          tháng <input class="bb-input-line" id="bbThang" style="width:26px;text-align:center;" placeholder="....">
+          năm <input class="bb-input-line" id="bbNam" style="width:42px;text-align:center;" placeholder="......"></span>
         </div>
       </div>
-      <div class="bb-so-line">Số: <input class="bb-input-line" style="width:60px;" placeholder="....../......"></div>
+      <div class="bb-so-line">Số: <input class="bb-input-line" id="bbSoBB" style="width:60px;" placeholder="....../......"></div>
 
       <h2>BIÊN BẢN BÀN GIAO TÀI SẢN</h2>
       <div class="bb-sub">Xác nhận việc bàn giao tài sản, tình trạng thực tế và trách nhiệm quản lý, bảo quản của bên nhận.</div>
@@ -1923,7 +2084,7 @@ async function renderBienBan(){
         <thead><tr><th>STT</th><th>Tên tài sản / CCDC</th><th>ĐVT</th><th>SL</th><th>Ghi chú / tình trạng</th><th></th></tr></thead>
         <tbody id="bbAssetTbody"></tbody>
       </table>
-      <div class="bb-tip">💡 Bấm vào ô <b>Tên tài sản / CCDC</b> để mở toàn bộ danh sách đang có. Chọn xong, tên, đơn vị tính và tình trạng sẽ tự động điền; đơn vị/phòng ban và bên nhận cũng được gợi ý theo người đang giữ tài sản.</div>
+      <div class="bb-tip">💡 Bấm vào ô <b>Tên tài sản / CCDC</b> để mở toàn bộ danh sách đang có. Chọn xong, tên, đơn vị tính và tình trạng sẽ tự động điền; đơn vị/phòng ban và bên nhận cũng được gợi ý theo người đang giữ tài sản. Bấm <b>Lưu biên bản</b> để giữ lại vào hệ thống, xem lại hoặc in lại sau này.</div>
 
       <p class="bb-note">Bên nhận có trách nhiệm quản lý, sử dụng đúng mục đích, bảo quản tài sản và thông báo kịp thời khi phát sinh hư hỏng hoặc mất mát.</p>
 
@@ -1935,7 +2096,97 @@ async function renderBienBan(){
   `;
   document.getElementById("bbPrintBtn").onclick = ()=> window.print();
   document.getElementById("bbAddRowBtn").onclick = addAssetRow;
+  document.getElementById("bbSaveBtn").onclick = saveBienBan;
+  document.getElementById("bbListBtn").onclick = toggleBienBanSavedList;
   addAssetRow();
+}
+
+/* ---------- lưu / xem lại biên bản bàn giao đã lập (sheet bien_ban) ---------- */
+function collectBienBanForm(){
+  return {
+    so_bb: document.getElementById("bbSoBB").value.trim(),
+    ngay_lap: isoToVn(document.getElementById("bbNgayLap").value),
+    nguoi_lap: document.getElementById("bbNguoiLap").value.trim(),
+    don_vi: document.getElementById("bbDonVi").value.trim(),
+    nguoi_phu_trach: document.getElementById("bbNguoiPhuTrach").value.trim(),
+    ben_giao: document.getElementById("bbBenGiao").value.trim(),
+    ben_nhan: document.getElementById("bbBenNhan").value.trim(),
+    dia_diem: document.getElementById("bbDiaDiem").value.trim(),
+    danh_sach_json: JSON.stringify(bbRows.map(r=>({ ma:r.ma, ten:r.ten, dvt:r.dvt, sl:r.sl, ghichu:r.ghichu }))),
+    ghi_chu: `${document.getElementById("bbCongTy").value.trim()} | ${document.getElementById("bbDonViSuDung").value.trim()}`
+  };
+}
+async function saveBienBan(){
+  const data = collectBienBanForm();
+  if(!bbRows.length){ toast("Vui lòng thêm ít nhất 1 tài sản trước khi lưu", true); return; }
+  if(!data.ben_giao || !data.ben_nhan){ toast("Vui lòng nhập Bên giao và Bên nhận trước khi lưu", true); return; }
+  const btn = document.getElementById("bbSaveBtn");
+  btn.disabled = true;
+  try{
+    let bienbanMa = bbEditingMa;
+    if(!bienbanMa){
+      bienbanMa = await apiFetchNextCode("bien_ban") || ("BB" + Date.now());
+    }
+    data.bienban_ma = bienbanMa;
+    const result = await apiWriteRemote(bbEditingMa ? "update" : "create", "bien_ban", bbEditingMa ? { id: bienbanMa, data } : { data });
+    bbEditingMa = bienbanMa;
+    delete dataCache["bien_ban"];
+    toast("Đã lưu biên bản " + bienbanMa + " thành công");
+  }catch(err){
+    toast("Lưu biên bản thất bại: " + err.message, true, saveBienBan);
+  }finally{
+    btn.disabled = false;
+  }
+}
+async function toggleBienBanSavedList(){
+  const wrap = document.getElementById("bbSavedListWrap");
+  if(wrap.dataset.open === "1"){ wrap.innerHTML = ""; wrap.dataset.open = "0"; return; }
+  wrap.dataset.open = "1";
+  wrap.innerHTML = `<div class="bb-doc" style="padding:16px 20px;margin-bottom:16px;"><div class="loading-row">Đang tải danh sách…</div></div>`;
+  delete dataCache["bien_ban"];
+  let rows;
+  try{ rows = await apiList("bien_ban"); }catch(e){ rows = []; }
+  rows = rows.slice().reverse();
+  wrap.innerHTML = `<div class="bb-doc" style="padding:16px 20px;margin-bottom:16px;">
+    <h3 style="margin:0 0 10px;font-size:14.5px;color:var(--forest-deep);">Biên bản đã lưu (${rows.length})</h3>
+    ${rows.length ? rows.map(r=>`
+      <div class="sp-history-item" onclick="loadBienBanIntoForm('${escAttr(r.bienban_ma)}')">
+        <div class="sp-history-top"><b>${r.bienban_ma}${r.so_bb?(" · Số "+r.so_bb):""}</b><span class="muted">${r.ngay_lap||"—"}</span></div>
+        <div class="muted" style="font-size:12.5px;">${r.ben_giao||"—"} → ${r.ben_nhan||"—"}</div>
+      </div>`).join("") : '<p class="muted">Chưa có biên bản nào được lưu.</p>'}
+  </div>`;
+}
+async function loadBienBanIntoForm(ma){
+  delete dataCache["bien_ban"];
+  const rows = await apiList("bien_ban");
+  const rec = rows.find(r=>r.bienban_ma===ma);
+  if(!rec){ toast("Không tìm thấy biên bản", true); return; }
+  bbEditingMa = ma;
+  document.getElementById("bbSoBB").value = rec.so_bb || "";
+  document.getElementById("bbNgayLap").value = vnToIso(rec.ngay_lap) || new Date().toISOString().slice(0,10);
+  document.getElementById("bbNguoiLap").value = rec.nguoi_lap || "";
+  document.getElementById("bbDonVi").value = rec.don_vi || "";
+  document.getElementById("bbNguoiPhuTrach").value = rec.nguoi_phu_trach || "";
+  document.getElementById("bbBenGiao").value = rec.ben_giao || "";
+  document.getElementById("bbBenNhan").value = rec.ben_nhan || "";
+  document.getElementById("bbDiaDiem").value = rec.dia_diem || "";
+  const [congTy, donViSuDung] = String(rec.ghi_chu||"").split("|").map(s=>(s||"").trim());
+  document.getElementById("bbCongTy").value = congTy || "";
+  document.getElementById("bbDonViSuDung").value = donViSuDung || "";
+  let list = [];
+  try{ list = JSON.parse(rec.danh_sach_json || "[]"); }catch(e){ list = []; }
+  bbRows = []; bbRowSeq = 0;
+  document.getElementById("bbAssetTbody").innerHTML = "";
+  list.forEach(item=>{
+    const row = { id: ++bbRowSeq, cc:null, ma:item.ma||"", ten:item.ten||"", dvt:item.dvt||"Cái", sl:item.sl||1, ghichu:item.ghichu||"" };
+    bbRows.push(row);
+    document.getElementById("bbAssetTbody").insertAdjacentHTML("beforeend", bbRowHtml(row));
+    wireBbRow(row.id);
+  });
+  if(!bbRows.length) addAssetRow();
+  document.getElementById("bbSavedListWrap").innerHTML = "";
+  document.getElementById("bbSavedListWrap").dataset.open = "0";
+  toast("Đã tải biên bản " + ma + " — bấm In để in lại, hoặc chỉnh sửa rồi Lưu biên bản để cập nhật.");
 }
 
 function getBbRow(id){ return bbRows.find(r=>r.id===id); }
@@ -2389,6 +2640,8 @@ function saveSpInfo(){
   body.querySelectorAll("[data-spfield]").forEach(el => {
     data[el.dataset.spfield] = el.dataset.datefield ? isoToVn(el.value) : el.value.trim();
   });
+  const errors = validateRecordData(data);
+  if(errors.length){ toast(errors.join(" · "), true); return; }
   queueOperation("update", sheet, id, data, ()=>{
     const idx = (dataCache[sheet]||[]).findIndex(r=>idOf(r,cfg.pk)===id);
     if(idx>-1) dataCache[sheet][idx] = { ...dataCache[sheet][idx], ...data };
@@ -2473,6 +2726,8 @@ async function openSpHistoryForm(hisId, forceEdit){
     const sheet = "lichsu_congcu";
     const hCfg = CONFIG[sheet];
     if(!hisId && !data.lich_su_ma){ toast("Vui lòng nhập Mã lịch sử", true); return; }
+    const errors = validateRecordData(data);
+    if(errors.length){ toast(errors.join(" · "), true); return; }
     queueOperation(hisId ? "update" : "create", sheet, hisId || null, data, ()=>{
       if(!dataCache[sheet]) dataCache[sheet] = [];
       if(hisId){
@@ -2599,7 +2854,7 @@ window.addEventListener("resize", repositionOpenFullOverlays);
    báo cho người dùng biết sớm thay vì chỉ phát hiện khi bấm Lưu */
 async function checkApiHealth(){
   try{
-    const json = await jsonpRequest({ action:"ping" }, 12000);
+    const json = await apiGet("ping", {}, 12000);
     if(!json || !json.success) throw new Error("ping thất bại");
   }catch(e){
     toast("Không kết nối được máy chủ dữ liệu. Việc xem danh sách có thể vẫn hoạt động do dữ liệu đã tải sẵn, nhưng Thêm/Sửa/Xoá sẽ báo lỗi. Vui lòng kiểm tra lại bản triển khai (deployment) Apps Script.", true);
