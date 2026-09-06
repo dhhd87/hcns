@@ -4,22 +4,25 @@
  *  Backend Google Apps Script — CRUD tổng quát cho mọi sheet trong
  *  Google Sheet "hanh_chinh_nhan_su_dataset".
  *
- *  CÁCH TRIỂN KHAI (đã gộp: Apps Script tự lưu trữ luôn cả giao diện,
- *  chỉ dùng 1 link duy nhất -> tránh lỗi CORS khi mở file .html trực tiếp):
+ *  CÁCH TRIỂN KHAI (Apps Script tự lưu trữ luôn cả giao diện, chỉ dùng
+ *  1 link duy nhất -> cùng origin với API, không còn cần JSONP/CORS):
  *  1. Mở Google Sheet dữ liệu -> Tiện ích mở rộng -> Apps Script.
  *  2. Xoá code mẫu, dán toàn bộ nội dung file này vào Code.gs.
  *  3. Trong project Apps Script: Tệp -> Thêm tệp -> HTML -> đặt tên đúng
  *     là "index" (không thêm đuôi .html, trình soạn thảo tự thêm).
- *     Dán toàn bộ nội dung file giao diện (yen-hcns-index.html) vào đó.
+ *     Dán toàn bộ nội dung file giao diện (index.html) vào đó.
  *  4. Sửa hằng số SHEET_ID bên dưới nếu cần (mặc định lấy ID trong
  *     đường link google_sheet_URL của dự án).
- *  5. Triển khai -> Triển khai dạng mới -> Ứng dụng web.
+ *  5. (Tuỳ chọn) Muốn bật khoá "mật khẩu chỉnh sửa": Project Settings ->
+ *     Script properties -> thêm khoá "EDIT_PASSWORD" với giá trị mật
+ *     khẩu mong muốn. Để trống/không đặt thì ai cũng ghi được như cũ.
+ *  6. Triển khai -> Triển khai dạng mới -> Ứng dụng web.
  *       - Người thực thi: Tôi (chủ sở hữu)
  *       - Người có quyền truy cập: Bất kỳ ai
- *  6. Mở URL /exec ngay trên trình duyệt để dùng app (đây cũng chính là
+ *  7. Mở URL /exec ngay trên trình duyệt để dùng app (đây cũng chính là
  *     API_URL bên trong file index.html — không cần sửa gì thêm vì đã
  *     tự trỏ vào chính nó).
- *  7. Mỗi lần sửa Code.gs hoặc index.html: vào Triển khai -> Quản lý
+ *  8. Mỗi lần sửa Code.gs hoặc index.html: vào Triển khai -> Quản lý
  *     triển khai -> Sửa -> Phiên bản mới -> Triển khai, để /exec cập
  *     nhật code mới nhất (chỉ Lưu (Ctrl+S) thôi thì /exec KHÔNG tự cập nhật).
  * ===================================================================
@@ -38,6 +41,29 @@ const UPLOAD_FOLDER_ID = '1dIBc1bvmfln1k29Aa8AM_4QWGk5pYwwu';
 // share link dạng xem trực tiếp). Backend không cần sửa gì thêm vì API là
 // CRUD tổng quát theo header của từng sheet.
 
+// MẬT KHẨU CHỈNH SỬA (Thêm/Sửa/Xoá/Tải ảnh): nếu để trống ("") thì AI CŨNG
+// ghi được, giữ nguyên hành vi cũ. Muốn bật khoá, đặt 1 chuỗi mật khẩu tại
+// đây (hoặc tốt hơn, đặt qua Project Settings -> Script properties, khoá
+// "EDIT_PASSWORD", để không lộ mật khẩu ngay trong mã nguồn). Người xem
+// (chưa nhập đúng mật khẩu) vẫn xem được toàn bộ danh sách bình thường.
+const EDIT_PASSWORD = '';
+
+function _requiredEditPassword() {
+  const fromProps = PropertiesService.getScriptProperties().getProperty('EDIT_PASSWORD');
+  return (fromProps && fromProps.length) ? fromProps : EDIT_PASSWORD;
+}
+
+// Trả về null nếu hợp lệ (không khoá, hoặc mật khẩu đúng); trả về thông báo
+// lỗi (string) nếu bị từ chối, để hàm gọi return luôn { success:false, ... }.
+function _checkEditPassword(pw) {
+  const required = _requiredEditPassword();
+  if (!required) return null; // chưa bật khoá chỉnh sửa
+  if (String(pw || '') !== String(required)) {
+    return 'Sai mật khẩu chỉnh sửa. Vui lòng nhập đúng mật khẩu để Thêm/Sửa/Xoá dữ liệu.';
+  }
+  return null;
+}
+
 // Khoá chính (có thể là khoá ghép, phân tách bởi dấu phẩy) cho từng sheet
 const PRIMARY_KEYS = {
   nhan_vien: ['nhanvien_ma'],
@@ -48,7 +74,16 @@ const PRIMARY_KEYS = {
   lichsu_congcu: ['lich_su_ma'],
   danh_muc: ['danh_muc_ma'],
   danhmuc_chitiet: ['danh_muc_ma'],
-  qua_tang: ['nhanvien_ma', 'ma_qua_tang']
+  qua_tang: ['nhanvien_ma', 'ma_qua_tang'],
+  bien_ban: ['bienban_ma']
+};
+
+// Header mặc định để TỰ ĐỘNG TẠO sheet "bien_ban" (lưu lại Biên bản bàn giao
+// đã lập) nếu sheet dữ liệu chưa có sẵn sheet này — người dùng không cần tự
+// tạo sheet + cột bằng tay.
+const AUTO_SHEET_HEADERS = {
+  bien_ban: ['bienban_ma', 'so_bb', 'ngay_lap', 'nguoi_lap', 'don_vi', 'nguoi_phu_trach',
+    'ben_giao', 'ben_nhan', 'dia_diem', 'danh_sach_json', 'ghi_chu']
 };
 
 function _ss() {
@@ -56,7 +91,14 @@ function _ss() {
 }
 
 function _sheet(name) {
-  const sh = _ss().getSheetByName(name);
+  let sh = _ss().getSheetByName(name);
+  if (!sh && AUTO_SHEET_HEADERS[name]) {
+    // Sheet phục vụ tính năng mới (vd lưu biên bản bàn giao) chưa tồn tại
+    // trong Google Sheet dữ liệu -> tự tạo kèm dòng tiêu đề, để người dùng
+    // không phải thao tác thủ công trên Sheet trước khi dùng tính năng.
+    sh = _ss().insertSheet(name);
+    sh.getRange(1, 1, 1, AUTO_SHEET_HEADERS[name].length).setValues([AUTO_SHEET_HEADERS[name]]);
+  }
   if (!sh) throw new Error('Không tìm thấy sheet: ' + name);
   return sh;
 }
@@ -152,7 +194,19 @@ function doGet(e) {
 
     if (action === 'list') {
       const { rows } = _rowsAsObjects(sh);
-      return respond({ success: true, data: rows });
+      // Phân trang phía server (tuỳ chọn): nếu FE gửi kèm page & pageSize thì
+      // chỉ trả về đúng 1 trang dữ liệu (đỡ tải cả sheet lớn mỗi lần chuyển
+      // trang), kèm "total" để FE tự tính số trang. Nếu không gửi 2 tham số
+      // này (như trước đây) thì trả về TOÀN BỘ danh sách như cũ, không phá vỡ
+      // các màn hình đang cần load hết dữ liệu để lọc/tổng hợp/tra cứu.
+      const pageSize = parseInt(params.pageSize, 10);
+      if (pageSize > 0) {
+        const page = Math.max(1, parseInt(params.page, 10) || 1);
+        const start = (page - 1) * pageSize;
+        const pageRows = rows.slice(start, start + pageSize);
+        return respond({ success: true, data: pageRows, total: rows.length, page: page, pageSize: pageSize });
+      }
+      return respond({ success: true, data: rows, total: rows.length });
     }
 
     if (action === 'nextcode') {
@@ -181,6 +235,8 @@ function doGet(e) {
         return respond({ success: false, message: 'Hệ thống đang bận xử lý yêu cầu khác, vui lòng thử lại sau ít giây.' });
       }
       try {
+        const pwErr = _checkEditPassword(params.editPassword);
+        if (pwErr) return respond({ success: false, message: pwErr, authError: true });
         const headers = _headers(sh);
         const keyFields = PRIMARY_KEYS[sheetName] || ['_row'];
         const data = params.data ? JSON.parse(params.data) : {};
@@ -214,6 +270,12 @@ function doPost(e) {
     }
     const body = JSON.parse(e.postData.contents);
     const action = (body.action || '').toLowerCase();
+
+    // Mọi thao tác ghi (kể cả tải ảnh) đều yêu cầu đúng mật khẩu chỉnh sửa
+    // nếu tính năng khoá đang được bật (xem _requiredEditPassword). Kiểm tra
+    // ngay từ đầu, trước khi đụng tới Drive/Sheet.
+    const pwErr = _checkEditPassword(body.editPassword);
+    if (pwErr) return _json({ success: false, message: pwErr, authError: true });
 
     // Tải ảnh lên Google Drive: xử lý riêng, KHÔNG cần khoá sheet (LockService)
     // vì bước này chỉ ghi file vào Drive, chưa đụng tới hàng/cột nào trong
@@ -351,7 +413,54 @@ function _schema() {
   return out;
 }
 
+// ================= VALIDATE DỮ LIỆU ĐẦU VÀO =================
+// Kiểm tra định dạng email/số điện thoại và tính hợp lý của các cặp ngày
+// tháng có liên quan (vd ngày nghỉ việc phải sau ngày vào làm). Áp dụng
+// CHUNG cho mọi sheet dựa theo TÊN CỘT (không cần khai báo riêng cho từng
+// sheet) — cột nào có tên "email"/"phone"/"ngay_..." thì tự được kiểm tra
+// nếu người dùng có nhập giá trị. Trả về mảng chuỗi lỗi (rỗng = hợp lệ).
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// SĐT Việt Nam: 10 số bắt đầu bằng 0, hoặc dạng +84 theo sau 9 số
+const PHONE_REGEX = /^(0\d{9,10}|\+84\d{9,10})$/;
+
+function _parseVnDate(v) {
+  const s = String(v || '').trim();
+  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!m) return null;
+  const d = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function _validateData(sheetName, data) {
+  const errors = [];
+  if (data.email != null && String(data.email).trim() !== '' && !EMAIL_REGEX.test(String(data.email).trim())) {
+    errors.push('Email không đúng định dạng: ' + data.email);
+  }
+  if (data.phone != null && String(data.phone).trim() !== '' && !PHONE_REGEX.test(String(data.phone).trim().replace(/[.\s-]/g, ''))) {
+    errors.push('Số điện thoại không hợp lệ: ' + data.phone);
+  }
+  // Các cặp ngày cần đảm bảo ngày sau >= ngày trước (chỉ kiểm tra khi cả 2 đều có giá trị hợp lệ)
+  const DATE_PAIRS = [
+    ['ngay_thu_viec', 'ngay_chinh_thuc', 'Ngày chính thức phải từ sau Ngày thử việc trở đi'],
+    ['ngay_thu_viec', 'ngay_nghi_viec', 'Ngày nghỉ việc phải từ sau Ngày thử việc trở đi'],
+    ['ngay_nhan', 'ngay_sua', 'Ngày sửa phải từ sau Ngày nhận trở đi']
+  ];
+  DATE_PAIRS.forEach(([fA, fB, msg]) => {
+    if (data[fA] == null || data[fB] == null) return;
+    const dA = _parseVnDate(data[fA]);
+    const dB = _parseVnDate(data[fB]);
+    if (dA && dB && dB < dA) errors.push(msg);
+  });
+  if (data.chi_phi_sua != null && String(data.chi_phi_sua).trim() !== '') {
+    const n = Number(String(data.chi_phi_sua).replace(/[^\d.-]/g, ''));
+    if (isNaN(n) || n < 0) errors.push('Chi phí sửa phải là một số không âm');
+  }
+  return errors;
+}
+
 function _create(sh, headers, data) {
+  const errors = _validateData(sh.getName(), data);
+  if (errors.length) return { success: false, message: errors.join('; ') };
   // Chặn trùng khoá chính nếu có
   const sheetName = sh.getName();
   const keyFields = PRIMARY_KEYS[sheetName];
@@ -372,6 +481,8 @@ function _findRowIndex(sh, headers, keyFields, keyValues) {
 }
 
 function _update(sh, headers, keyFields, keyValues, data) {
+  const errors = _validateData(sh.getName(), data);
+  if (errors.length) return { success: false, message: errors.join('; ') };
   const rowIndex = _findRowIndex(sh, headers, keyFields, keyValues);
   if (rowIndex === -1) return { success: false, message: 'Không tìm thấy bản ghi để cập nhật' };
   const currentValues = sh.getRange(rowIndex, 1, 1, headers.length).getValues()[0];
