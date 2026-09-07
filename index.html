@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Yến · Hành chính – Nhân sự</title>
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'%3E%3Cpath d='M15 5C22 7 25 13 25 17C25 23 20.5 27 15 27C9.5 27 5 23 5 17C5 13 8 7 15 5Z' fill='%234CAF50' stroke='%231F3A28' stroke-width='1.5'/%3E%3Cpath d='M15 9V25' stroke='%231F3A28' stroke-width='1.3'/%3E%3Cpath d='M15 13L10.5 11M15 17L10 15.5M15 21L10.8 20' stroke='%231F3A28' stroke-width='1'/%3E%3C/svg%3E">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'%3E%3Crect x='1' y='1' width='28' height='28' rx='7' fill='%232B4635'/%3E%3Cpath d='M15 25V15' stroke='%23DCEFD1' stroke-width='1.4' stroke-linecap='round'/%3E%3Cpath d='M15 16C11 15 8 12 7 8C11 8 14 11 15 16Z' fill='%239FE0A0'/%3E%3Cpath d='M15 16C19 15 22 12 23 8C19 8 16 11 15 16Z' fill='%23B7EAAE'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
@@ -464,9 +464,9 @@
     <div class="brand">
       <div class="mark">
         <svg width="30" height="30" viewBox="0 0 30 30" fill="none">
-          <path d="M15 5C22 7 25 13 25 17C25 23 20.5 27 15 27C9.5 27 5 23 5 17C5 13 8 7 15 5Z" fill="#7ED957" stroke="#1F3A28" stroke-width="1.4"/>
-          <path d="M15 9V25" stroke="#1F3A28" stroke-width="1.2"/>
-          <path d="M15 13L10.5 11M15 17L10 15.5M15 21L10.8 20" stroke="#1F3A28" stroke-width="1"/>
+          <path d="M15 25V15" stroke="#DCEFD1" stroke-width="1.4" stroke-linecap="round"/>
+          <path d="M15 16C11 15 8 12 7 8C11 8 14 11 15 16Z" fill="#9FE0A0"/>
+          <path d="M15 16C19 15 22 12 23 8C19 8 16 11 15 16Z" fill="#B7EAAE"/>
         </svg>
         <div>
           <div class="brand-name">Yến Nhân Sự</div>
@@ -738,7 +738,7 @@ const CONFIG = {
     icon:iconTool(), pk:["cong_cu_ma"],
     table:["cong_cu_ten","cong_cu_ma","nhanvien_ma","phongban_ten","gia_tri","ngay_nhan"],
     sections:[
-      {title:"Bàn giao", fields:["cong_cu_ma","nhanvien_ma","khu_vuc","ngay_nhan","tinhtrang_khinhan","gia_tri"]},
+      {title:"Bàn giao", fields:["cong_cu_ma","cong_cu_ten","nhanvien_ma","khu_vuc","ngay_nhan","tinhtrang_khinhan","gia_tri"]},
       {title:"Bản quyền phần mềm", fields:["banquyen_hedieuhanh","banquyen_EOM","banquyen_office"]},
       {title:"Khác", fields:["lich_su","ghi_chu","photo_url"]}
     ],
@@ -3029,11 +3029,29 @@ function spFieldEdit(f, val, isPk, sheet){
   return `<div class="field"><label>${L(f, sheet)}</label><input type="text" data-spfield="${f}" value="${escAttr(val ?? "")}"></div>`;
 }
 
-function renderSpInfo(){
+async function renderSpInfo(){
   const cfg = CONFIG[spState.sheet];
   const record = spState.record;
   const body = document.getElementById("spBody");
-  body.innerHTML = cfg.sections.map(sec => `
+
+  let extraCardHtml = "";
+  if(spState.sheet === "cong_cu"){
+    const [specRows, nvRows, pbRows] = await Promise.all([
+      apiList("thongso_kythuat"), apiList("nhan_vien"), apiList("phong_ban")
+    ]);
+    const tenCongCu = computeCongCuTen(record, specRows);
+    const nv = nvRows.find(n => n.nhanvien_ma === record.nhanvien_ma);
+    const pb = nv ? pbRows.find(p => p.phongban_ma === nv.phongban_ma) : null;
+    extraCardHtml = `
+      <div class="info-card" style="margin-bottom:18px;">
+        <div><span class="k">Tên công cụ (tổng hợp)</span><span class="v">${tenCongCu || "—"}</span></div>
+        <div><span class="k">Phòng ban</span><span class="v">${pb ? pb.phongban_ten : "—"}</span></div>
+        <div><span class="k">Người đang giữ</span><span class="v">${nv ? nv.nhanvien_ten : "—"}${record.nhanvien_ma ? " ("+record.nhanvien_ma+")" : ""}</span></div>
+        <div><span class="k">Khu vực</span><span class="v">${record.khu_vuc || "—"}</span></div>
+      </div>`;
+  }
+
+  body.innerHTML = extraCardHtml + cfg.sections.map(sec => `
     <div class="sp-section">
       <div class="sp-section-title">${sec.title}</div>
       <div class="sp-fields-grid">${sec.fields.filter(f=>!HIDDEN_IN_VIEW_FIELDS.has(f)).map(f => spFieldView(f, record[f], spState.sheet, spState.relMaps)).join("")}</div>
