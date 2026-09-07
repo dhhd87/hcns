@@ -677,7 +677,8 @@ const LABELS = {
 /* nhãn riêng theo từng sheet, ưu tiên hơn nhãn dùng chung ở trên (tránh nhầm lẫn
    khi cùng 1 tên cột nhưng ý nghĩa khác nhau ở mỗi sheet, vd trang_thai) */
 const LABEL_OVERRIDES = {
-  lichsu_congcu: { trang_thai: "Trạng thái sửa chữa" }
+  lichsu_congcu: { trang_thai: "Trạng thái sửa chữa" },
+  cong_cu: { gia_tri: "Giá trị tài sản (VNĐ)" }
 };
 const L = (k, sheet) => (sheet && LABEL_OVERRIDES[sheet] && LABEL_OVERRIDES[sheet][k]) || LABELS[k] || k;
 
@@ -727,9 +728,9 @@ const CONFIG = {
   cong_cu: {
     label:"Công cụ dụng cụ", desc:"Công cụ, thiết bị bàn giao cho nhân sự",
     icon:iconTool(), pk:["cong_cu_ma"],
-    table:["cong_cu_ten","cong_cu_ma","nhanvien_ma","phongban_ten","ngay_nhan"],
+    table:["cong_cu_ten","cong_cu_ma","nhanvien_ma","phongban_ten","gia_tri","ngay_nhan"],
     sections:[
-      {title:"Bàn giao", fields:["cong_cu_ma","nhanvien_ma","khu_vuc","ngay_nhan","tinhtrang_khinhan"]},
+      {title:"Bàn giao", fields:["cong_cu_ma","nhanvien_ma","khu_vuc","ngay_nhan","tinhtrang_khinhan","gia_tri"]},
       {title:"Bản quyền phần mềm", fields:["banquyen_hedieuhanh","banquyen_EOM","banquyen_office"]},
       {title:"Khác", fields:["lich_su","ghi_chu","photo_url"]}
     ],
@@ -938,10 +939,35 @@ async function apiList(sheet){
   dataCache[sheet] = json.data;
   return json.data;
 }
-async function apiFetchNextCode(sheet){
+/* Sinh mã kế tiếp HOÀN TOÀN Ở PHÍA TRÌNH DUYỆT, không gọi server (action=nextcode
+   trước đây phải chờ round-trip mạng mỗi lần bấm "Thêm mới"). Vì mọi màn hình đều
+   đã gọi apiList(sheet) để tải dữ liệu trước khi mở form, danh sách bản ghi cần
+   thiết để tính mã kế tiếp ĐÃ CÓ SẴN trong dataCache — tính ngay tại chỗ, không
+   còn độ trễ nào, kể cả lần thêm mới đầu tiên (chỉ tốn 1 lần tải sheet như cũ, dùng
+   lại cache cho các lần sau). Logic giữ nguyên tiền tố chữ + độ dài số đệm, y hệt
+   hàm _nextCode() bên Code.gs, để không lệch giữa 2 bên khi backend còn được các
+   ứng dụng khác gọi trực tiếp qua JSONP. */
+function nextCodeFromRows(rows, field){
+  let maxNum = -1, prefix = "", width = 1;
+  rows.forEach(r=>{
+    const v = String(r[field] ?? "").trim();
+    const m = v.match(/^([^\d]*)(\d+)$/);
+    if(m){
+      const num = parseInt(m[2], 10);
+      if(num > maxNum){ maxNum = num; prefix = m[1]; width = m[2].length; }
+    }
+  });
+  if(maxNum === -1) return null;
+  const nextNum = maxNum + 1;
+  const nextStr = String(nextNum);
+  return prefix + nextStr.padStart(Math.max(width, nextStr.length), "0");
+}
+async function apiFetchNextCode(sheet, fieldOverride){
   try{
-    const json = await apiGet("nextcode", { sheet });
-    return (json.success && json.data && json.data.code) ? json.data.code : null;
+    const field = fieldOverride || (CONFIG[sheet] && CONFIG[sheet].pk && CONFIG[sheet].pk[0]);
+    if(!field) return null;
+    const rows = await apiList(sheet); // cache-first: chỉ tải mạng nếu chưa có sẵn
+    return nextCodeFromRows(rows, field);
   }catch(e){ return null; }
 }
 /* apiWriteRemote: gọi tới Apps Script bằng POST JSON (create/update/delete).
@@ -1328,6 +1354,148 @@ function computeCongCuTen(row, specRows){
   return parts.length ? parts.join(" ") : row.cong_cu_ma;
 }
 
+/* ================= THÔNG SỐ KỸ THUẬT CÔNG CỤ (sheet thongso_kythuat) =================
+   Liên kết qua cột cong_cu_ma (thongso_kythuat.cong_cu_ma <-> cong_cu.cong_cu_ma),
+   khoá chính ghép [cong_cu_ma, thuoc_tinh_ma]. Dùng chung 1 bộ hàm cho cả 3 nơi:
+   form Thêm/Sửa công cụ (openForm) và tab "Thông số kỹ thuật" ở panel chi tiết
+   (openRecordPanel) — cho phép xem/thêm/sửa/xoá ngay tại chỗ, không cần điều
+   hướng sang màn hình khác. ==================================================== */
+let ttRows = [];   // các dòng thông số đang soạn (đang mở form/tab nào thì dùng biến này)
+let ttRowSeq = 0;
+
+async function loadTtRowsForCongCu(congCuMa){
+  ttRows = []; ttRowSeq = 0;
+  if(!congCuMa) return;
+  const [specRows, attrRows] = await Promise.all([apiList("thongso_kythuat"), apiList("thuoc_tinh")]);
+  const tenMap = {}; attrRows.forEach(a => { tenMap[a.thuoc_tinh_ma] = a.thuoc_tinh_ten; });
+  specRows.filter(s => s.cong_cu_ma === congCuMa).forEach(s => {
+    ttRows.push({ id: ++ttRowSeq, thuoc_tinh_ma: s.thuoc_tinh_ma, thuoc_tinh_ten: tenMap[s.thuoc_tinh_ma] || s.thuoc_tinh_ma, gia_tri: s.gia_tri || "", _existing: true });
+  });
+}
+function getTtRow(id){ return ttRows.find(r=>r.id===id); }
+function renumberTtRows(){
+  ttRows.forEach((r,i)=>{
+    const cell = document.querySelector(`tr[data-ttrow="${r.id}"] .bb-stt`);
+    if(cell) cell.textContent = i+1;
+  });
+}
+function ttRowHtml(row, locked){
+  const idx = ttRows.findIndex(r=>r.id===row.id)+1;
+  return `<tr data-ttrow="${row.id}">
+    <td class="bb-stt">${idx}</td>
+    <td><div class="bb-asset-name ${row.thuoc_tinh_ten?"":"empty"}" data-role="tt-name">${row.thuoc_tinh_ten || "Bấm để chọn thuộc tính"}</div></td>
+    <td><input type="text" data-role="tt-giatri" value="${escAttr(row.gia_tri||"")}" placeholder="Giá trị..." ${locked?"disabled":""}></td>
+    <td>${locked ? "" : `<button class="bb-del-row" data-role="tt-del" title="Xoá dòng">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>`}</td>
+  </tr>`;
+}
+function wireTtRow(id, locked){
+  const tr = document.querySelector(`tr[data-ttrow="${id}"]`);
+  if(!tr) return;
+  if(!locked){
+    const nameEl = tr.querySelector('[data-role="tt-name"]');
+    if(nameEl) nameEl.onclick = ()=> pickThuocTinhForRow(id);
+    const giaEl = tr.querySelector('[data-role="tt-giatri"]');
+    if(giaEl) giaEl.addEventListener("input", e=>{ getTtRow(id).gia_tri = e.target.value; });
+    const delEl = tr.querySelector('[data-role="tt-del"]');
+    if(delEl) delEl.onclick = ()=>{ ttRows = ttRows.filter(r=>r.id!==id); tr.remove(); renumberTtRows(); };
+  }
+}
+function renderTtTable(containerId, locked){
+  const wrap = document.getElementById(containerId);
+  if(!wrap) return;
+  wrap.innerHTML = `
+    <div class="bb-asset-head" style="margin:0 0 10px;">
+      <h3 style="font-size:13px;">Thông số kỹ thuật</h3>
+      ${locked ? "" : `<button type="button" class="bb-add-row" id="${containerId}AddBtn" title="Thêm dòng">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M12 5v14M5 12h14"/></svg>
+      </button>`}
+    </div>
+    <table class="bb-asset-table"><thead><tr><th>STT</th><th>Thuộc tính</th><th>Giá trị</th><th></th></tr></thead>
+    <tbody id="${containerId}Tbody"></tbody></table>
+    ${ttRows.length ? "" : '<p class="field-hint" style="margin:2px 0 0;">Chưa có thông số kỹ thuật nào.</p>'}
+  `;
+  const tbody = document.getElementById(containerId+"Tbody");
+  ttRows.forEach(row=>{
+    tbody.insertAdjacentHTML("beforeend", ttRowHtml(row, locked));
+    wireTtRow(row.id, locked);
+  });
+  if(!locked){
+    const addBtn = document.getElementById(containerId+"AddBtn");
+    if(addBtn) addBtn.onclick = ()=>{
+      const row = { id: ++ttRowSeq, thuoc_tinh_ma:"", thuoc_tinh_ten:"", gia_tri:"" };
+      ttRows.push(row);
+      renderTtTable(containerId, locked);
+    };
+  }
+}
+async function pickThuocTinhForRow(rowId){
+  await openRelPicker({ sheet:"thuoc_tinh", value:"thuoc_tinh_ma", text:"thuoc_tinh_ten" }, "Thuộc tính kỹ thuật", (rec)=>{
+    if(!rec) return;
+    const row = getTtRow(rowId);
+    if(!row) return;
+    row.thuoc_tinh_ma = rec.thuoc_tinh_ma;
+    row.thuoc_tinh_ten = rec.thuoc_tinh_ten;
+    const tr = document.querySelector(`tr[data-ttrow="${rowId}"]`);
+    if(tr){
+      const nameEl = tr.querySelector('[data-role="tt-name"]');
+      nameEl.textContent = rec.thuoc_tinh_ten;
+      nameEl.classList.remove("empty");
+    }
+  });
+}
+/* Đồng bộ (thêm/sửa/xoá) toàn bộ dòng thông số kỹ thuật của 1 công cụ lên sheet
+   thongso_kythuat, xếp qua hàng đợi đồng bộ ngầm giống các thao tác khác. So sánh
+   ttRows hiện tại với các dòng "_existing" (đã có sẵn từ trước) để biết dòng nào
+   cần xoá (bị bỏ khỏi bảng), dòng nào cần thêm mới, dòng nào cần cập nhật. */
+function syncTtRowsForCongCu(congCuMa){
+  if(!congCuMa) return;
+  const sheet = "thongso_kythuat";
+  const pk = ["cong_cu_ma","thuoc_tinh_ma"];
+  const validRows = ttRows.filter(r=>r.thuoc_tinh_ma);
+  const keptMa = new Set(validRows.map(r=>r.thuoc_tinh_ma));
+  ttRows.filter(r=>r._existing && !keptMa.has(r.thuoc_tinh_ma)).forEach(r=>{
+    const id = `${congCuMa}|${r.thuoc_tinh_ma}`;
+    queueOperation("delete", sheet, id, null, ()=>{
+      if(dataCache[sheet]) dataCache[sheet] = dataCache[sheet].filter(x=>idOf(x,pk)!==id);
+    });
+  });
+  validRows.forEach(r=>{
+    const id = `${congCuMa}|${r.thuoc_tinh_ma}`;
+    const rowData = { cong_cu_ma: congCuMa, thuoc_tinh_ma: r.thuoc_tinh_ma, gia_tri: r.gia_tri || "" };
+    const action = r._existing ? "update" : "create";
+    queueOperation(action, sheet, action==="update" ? id : null, rowData, ()=>{
+      if(!dataCache[sheet]) dataCache[sheet] = [];
+      const idx = dataCache[sheet].findIndex(x=>idOf(x,pk)===id);
+      if(idx>-1) dataCache[sheet][idx] = { ...dataCache[sheet][idx], ...rowData };
+      else dataCache[sheet] = [...dataCache[sheet], rowData];
+    });
+  });
+}
+async function renderSpSpecs(){
+  const cc = spState.record;
+  await loadTtRowsForCongCu(cc.cong_cu_ma);
+  const body = document.getElementById("spBody");
+  body.innerHTML = `<div id="ttContainerSp"></div>
+    <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:14px;">
+      <button class="btn btn-ghost btn-sm" id="ttEditBtn">Sửa</button>
+      <button class="btn btn-primary btn-sm" id="ttSaveBtn" style="display:none;">Lưu lại</button>
+    </div>`;
+  renderTtTable("ttContainerSp", true);
+  document.getElementById("spFoot").style.display = "none";
+  document.getElementById("ttEditBtn").onclick = ()=>{
+    renderTtTable("ttContainerSp", false);
+    document.getElementById("ttEditBtn").style.display = "none";
+    document.getElementById("ttSaveBtn").style.display = "inline-flex";
+  };
+  document.getElementById("ttSaveBtn").onclick = ()=>{
+    syncTtRowsForCongCu(cc.cong_cu_ma);
+    toast("Đã lưu thông số kỹ thuật (đang đồng bộ ngầm…)");
+    renderSpSpecs();
+  };
+}
+
 /* Chuẩn hoá mã để so khớp bất kể số 0 đệm khác nhau (vd "CCDC04" và
    "CCDC00004" cùng trỏ tới 1 danh mục nhưng độ dài số khác nhau do được
    nhập tay ở các thời điểm khác nhau). Tách phần chữ (tiền tố) và phần số,
@@ -1551,7 +1719,7 @@ const URL_FIELDS = new Set(["photo_url","hoadon_url"]);
    ở chế độ xem thì ẩn đi để tránh lộ link dài, rối giao diện */
 const HIDDEN_IN_VIEW_FIELDS = new Set(["photo_url","hoadon_url"]);
 const DATE_FIELDS_HINT = f => f.startsWith("ngay_") || f==="han_bao_hanh";
-const NUMBER_FIELDS = new Set(["chi_phi_sua"]);
+const NUMBER_FIELDS = new Set(["chi_phi_sua","gia_tri"]);
 /* chuyển link chia sẻ Google Drive (dạng .../file/d/ID/view) sang link ảnh xem trực tiếp,
    để tránh trường hợp ảnh hoá đơn hiện trắng do không phải link ảnh trực tiếp */
 function driveDirectLink(url){
@@ -1777,6 +1945,14 @@ async function openForm(id){
     return `<fieldset class="section"><legend>${sec.title}</legend><div class="field-grid">${fieldsHtml}</div></fieldset>`;
   }).join("");
 
+  // Công cụ: nối thêm khối "Thông số kỹ thuật" (liên kết qua cong_cu_ma <-> sheet
+  // thongso_kythuat) để xem/thêm/sửa/xoá ngay trong lúc thêm mới hoặc sửa công cụ.
+  if(currentSheet === "cong_cu"){
+    body.innerHTML += `<fieldset class="section"><legend>Thông số kỹ thuật</legend><div id="ttContainerForm"></div></fieldset>`;
+    await loadTtRowsForCongCu(record && record.cong_cu_ma);
+    renderTtTable("ttContainerForm", false);
+  }
+
   wireImageFields(body);
   pushOverlay("formOverlay");
   document.getElementById("formOverlay").classList.add("show");
@@ -1787,7 +1963,7 @@ async function openForm(id){
    Code.gs, giúp báo lỗi ngay tại chỗ thay vì phải chờ round-trip lên server) ---------- */
 const EMAIL_REGEX_FE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PHONE_REGEX_FE = /^(0\d{9,10}|\+84\d{9,10})$/;
-function validateRecordData(data){
+function validateRecordData(data, sheet){
   const errors = [];
   if(data.email != null && String(data.email).trim() !== "" && !EMAIL_REGEX_FE.test(String(data.email).trim())){
     errors.push("Email không đúng định dạng: " + data.email);
@@ -1808,6 +1984,12 @@ function validateRecordData(data){
   if(data.chi_phi_sua != null && String(data.chi_phi_sua).trim() !== ""){
     const n = Number(String(data.chi_phi_sua).replace(/[^\d.-]/g,""));
     if(isNaN(n) || n < 0) errors.push("Chi phí sửa phải là một số không âm");
+  }
+  // gia_tri cũng dùng chung tên cột ở sheet thongso_kythuat (giá trị thuộc tính,
+  // không phải số) nên chỉ kiểm tra số khi đang ở sheet công cụ (giá trị tài sản)
+  if(sheet === "cong_cu" && data.gia_tri != null && String(data.gia_tri).trim() !== ""){
+    const n = Number(String(data.gia_tri).replace(/[^\d.-]/g,""));
+    if(isNaN(n) || n < 0) errors.push("Giá trị tài sản phải là một số không âm");
   }
   return errors;
 }
@@ -1833,7 +2015,7 @@ function doFormSave(){
   const data = collectFormData();
   const missingPk = cfg.pk.filter(f=>!data[f]);
   if(missingPk.length){ toast(`Vui lòng nhập ${missingPk.map(f=>L(f, sheet)).join(", ")}`, true); return; }
-  const errors = validateRecordData(data);
+  const errors = validateRecordData(data, sheet);
   if(errors.length){ toast(errors.join(" · "), true); return; }
 
   const id = editingId;
@@ -1849,6 +2031,9 @@ function doFormSave(){
       dataCache[sheet] = [...dataCache[sheet], { ...data }];
     }
   });
+  if(sheet === "cong_cu"){
+    syncTtRowsForCongCu(data.cong_cu_ma);
+  }
   toast(isUpdate ? "Đã cập nhật (đang đồng bộ ngầm…)" : "Đã thêm mới (đang đồng bộ ngầm…)");
   refreshCounts();
   if(currentSheet===sheet) loadTable();
@@ -2144,7 +2329,7 @@ async function saveBienBan(){
   try{
     let bienbanMa = bbEditingMa;
     if(!bienbanMa){
-      bienbanMa = await apiFetchNextCode("bien_ban") || ("BB" + Date.now());
+      bienbanMa = await apiFetchNextCode("bien_ban", "bienban_ma") || ("BB" + Date.now());
     }
     data.bienban_ma = bienbanMa;
     const result = await apiWriteRemote(bbEditingMa ? "update" : "create", "bien_ban", bbEditingMa ? { id: bienbanMa, data } : { data });
@@ -2550,6 +2735,7 @@ async function openRecordPanel(sheet, id){
   if(sheet === "cong_cu"){
     tabsEl.innerHTML = `
       <div class="subtab active" data-tab="info" onclick="switchSpTab('info')">Thông tin</div>
+      <div class="subtab" data-tab="specs" onclick="switchSpTab('specs')">Thông số kỹ thuật</div>
       <div class="subtab" data-tab="history" onclick="switchSpTab('history')">Lịch sử công cụ</div>`;
   }else{
     tabsEl.innerHTML = "";
@@ -2572,7 +2758,9 @@ async function buildRelMaps(sheet){
 
 function switchSpTab(tab){
   document.querySelectorAll("#spTabs .subtab").forEach(t => t.classList.toggle("active", t.dataset.tab === tab));
-  if(tab === "info") renderSpInfo(); else renderSpHistory();
+  if(tab === "info") renderSpInfo();
+  else if(tab === "specs") renderSpSpecs();
+  else renderSpHistory();
 }
 
 function spFieldView(f, val, sheet, relMaps){
@@ -2659,7 +2847,7 @@ function saveSpInfo(){
   body.querySelectorAll("[data-spfield]").forEach(el => {
     data[el.dataset.spfield] = el.dataset.datefield ? isoToVn(el.value) : el.value.trim();
   });
-  const errors = validateRecordData(data);
+  const errors = validateRecordData(data, sheet);
   if(errors.length){ toast(errors.join(" · "), true); return; }
   queueOperation("update", sheet, id, data, ()=>{
     const idx = (dataCache[sheet]||[]).findIndex(r=>idOf(r,cfg.pk)===id);
@@ -2785,6 +2973,7 @@ async function openDetail(id){
       <div><span class="k">Nhân sự đang dùng</span><span class="v">${nv?nv.nhanvien_ten:"—"} (${cc.nhanvien_ma||"—"})</span></div>
       <div><span class="k">Phòng ban</span><span class="v">${pb?pb.phongban_ten:"—"}</span></div>
       <div><span class="k">Khu vực</span><span class="v">${cc.khu_vuc||"—"}</span></div>
+      <div><span class="k">Giá trị tài sản (VNĐ)</span><span class="v">${cc.gia_tri?formatNumber(cc.gia_tri):"—"}</span></div>
       <div><span class="k">Ngày nhận</span><span class="v">${cc.ngay_nhan||"—"}</span></div>
       <div><span class="k">Tình trạng khi nhận</span><span class="v">${cc.tinhtrang_khinhan||"—"}</span></div>
       <div><span class="k">Bản quyền hệ điều hành</span><span class="v">${cc.banquyen_hedieuhanh||"—"}</span></div>
