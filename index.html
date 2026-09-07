@@ -786,7 +786,7 @@ const CONFIG = {
     icon:iconFlask(), pk:["thuoc_tinh_ma"],
     table:["thuoc_tinh_ma","thuoc_tinh_ten","danh_muc_ma","danh_muc_ma_ten"],
     sections:[{title:"Thông tin thuộc tính", fields:["thuoc_tinh_ma","thuoc_tinh_ten","danh_muc_ma"]}],
-    relations:{ danh_muc_ma:{sheet:"danh_muc", value:"danh_muc_ma", text:"danh_muc_ten"} },
+    relations:{ danh_muc_ma:{sheet:"danhmuc_chitiet", value:"danh_muc_ma", text:"danh_muc_ten"} },
     filters:["danh_muc_ma"]
   },
   qua_tang: {
@@ -1626,7 +1626,7 @@ async function renderTable(){
   // trường ảo "danh_muc_ma_ten" cho thuộc tính kỹ thuật: tên danh mục
   let dmTenMap = null;
   if(currentSheet === "thuoc_tinh" && cfg.table.includes("danh_muc_ma_ten")){
-    dmTenMap = await relationMap({ sheet:"danh_muc", value:"danh_muc_ma", text:"danh_muc_ten" });
+    dmTenMap = await relationMap({ sheet:"danhmuc_chitiet", value:"danh_muc_ma", text:"danh_muc_ten" });
   }
 
   // trường ảo "phongban_ten" cho công cụ dụng cụ: join qua nhân viên -> phòng ban
@@ -1749,8 +1749,8 @@ async function buildExportDataForSheet(sheet, rowsInput){
     extraCols.push({ label:"Tên danh mục cha", fn: r => dmMap[r.danh_muc_cha] || dmMap[normalizeCodeKey(r.danh_muc_cha)] || "" });
   }
   if(sheet === "thuoc_tinh"){
-    const dmMap = await relationMap({ sheet:"danh_muc", value:"danh_muc_ma", text:"danh_muc_ten" });
-    extraCols.push({ label:"Tên danh mục", fn: r => dmMap[r.danh_muc_ma] || "" });
+    const dmMap = await relationMap({ sheet:"danhmuc_chitiet", value:"danh_muc_ma", text:"danh_muc_ten" });
+    extraCols.push({ label:"Tên danh mục", fn: r => dmMap[r.danh_muc_ma] || dmMap[normalizeCodeKey(r.danh_muc_ma)] || "" });
   }
   if(sheet === "lichsu_congcu"){
     const [specRows, ccRows] = await Promise.all([apiList("thongso_kythuat"), apiList("cong_cu")]);
