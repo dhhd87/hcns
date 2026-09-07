@@ -7,6 +7,7 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'%3E%3Cpath d='M15 26C15 26 5 21 5 12.5C5 8 8 4.5 12 4.5C13.8 4.5 15 5.5 15 5.5C15 5.5 16.2 4.5 18 4.5C22 4.5 25 8 25 12.5C25 21 15 26 15 26Z' fill='%2393AF89' stroke='%232B4635' stroke-width='1.6'/%3E%3Cpath d='M15 26V10' stroke='%232B4635' stroke-width='1.6'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
   :root{
     --paper:#F1F0E4;
@@ -451,6 +452,7 @@
     .topbar-actions .filter-chip{width:100%;justify-content:space-between;order:-1;}
     .topbar-actions .search-box{width:100%;min-width:0;}
     .topbar-actions .btn-primary{width:100%;justify-content:center;}
+    .topbar-actions #exportBtn{width:100%;justify-content:center;}
   }
 </style>
 </head>
@@ -495,6 +497,10 @@
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
           <input id="searchInput" type="text" placeholder="Tìm kiếm...">
         </div>
+        <button class="btn btn-ghost" id="exportBtn" title="Xuất toàn bộ số liệu (kể cả cột ẩn/liên quan) ra file Excel">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v13m0 0l4-4m-4 4l-4-4"/><path d="M4 21h16"/></svg>
+          Xuất Excel
+        </button>
         <button class="btn btn-primary" id="addBtn">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12h14"/></svg>
           Thêm mới
@@ -851,6 +857,7 @@ let pendingDelete = null;
 let activeFilter = null;   // {label, predicate} khi drill-down từ Tổng quan
 let quickFilters = {};     // { fieldName: selectedValue } - bộ lọc nhanh theo cột trên mỗi danh sách
 let sortState = {};        // { sheetName: { field, dir:"asc"|"desc" } } - sắp xếp theo cột trên mỗi danh sách
+let hoaDonExportRows = []; // dữ liệu Hoá đơn (đầy đủ cột) đang hiển thị, dùng khi bấm "Xuất Excel"
 
 /* ---------- gọi API bằng fetch() ----------
    TRƯỚC ĐÂY: dùng JSONP (thẻ <script src="...">) để né lỗi CORS khi mở file
@@ -1220,6 +1227,8 @@ async function switchSheet(key, filter){
   document.getElementById("addBtn").style.display = hideToolbar ? "none" : "inline-flex";
   document.querySelector(".search-box").style.display = hideToolbar ? "none" : "flex";
   document.querySelector(".ledger .foot-row").style.display = hideToolbar ? "none" : "flex";
+  const canExport = !!(cfg.table || cfg.isHoaDon);
+  document.getElementById("exportBtn").style.display = canExport ? "inline-flex" : "none";
   document.querySelector(".ledger").classList.toggle("plain", !!cfg.isOverview);
   if(cfg.isOverview){
     await renderOverview();
@@ -1700,6 +1709,102 @@ async function renderTable(){
 function gotoPage(p){ page = p; renderTable(); }
 function escAttr(s){ return String(s).replace(/'/g,"&#39;"); }
 
+/* ================= XUẤT EXCEL (đầy đủ số liệu, không chỉ các cột đang hiển thị) =================
+   Xuất TOÀN BỘ cột gốc có trong sheet (kể cả cột không nằm trong cfg.table hiển thị
+   ở bảng danh sách), cộng thêm các cột "Tên" tra theo khoá ngoại (vd phongban_ma ->
+   Phòng ban (Tên)) và các cột số liệu tổng hợp/join thêm đang được tính toán ở nơi
+   khác trong app (vd Tên công cụ tổng hợp từ thông số kỹ thuật, Phòng ban theo
+   người đang giữ công cụ...), để người xem file Excel có đủ ngữ cảnh mà không cần
+   mở lại nhiều sheet để tra cứu chéo. */
+async function buildExportDataForSheet(sheet, rowsInput){
+  const cfg = CONFIG[sheet];
+  const rows = rowsInput && rowsInput.length ? rowsInput : (dataCache[sheet] || await apiList(sheet));
+
+  const rawFields = [];
+  const seenField = new Set();
+  rows.forEach(r => Object.keys(r).forEach(k => {
+    if(k === "_row" || seenField.has(k)) return;
+    seenField.add(k); rawFields.push(k);
+  }));
+
+  // bản đồ mã -> tên cho mọi trường có khai báo quan hệ (relations) của sheet này
+  const relMaps = {};
+  for(const [field, relCfg] of Object.entries(cfg.relations || {})){
+    relMaps[field] = await relationMap(relCfg);
+  }
+
+  // cột tính toán/join thêm đặc thù theo từng sheet (không phải cột gốc trong Google
+  // Sheet nhưng là số liệu liên quan trực tiếp, đã được dùng để hiển thị nơi khác)
+  const extraCols = [];
+  if(sheet === "cong_cu"){
+    const [specRows, nvRows] = await Promise.all([apiList("thongso_kythuat"), apiList("nhan_vien")]);
+    const pbMap = await relationMap({ sheet:"phong_ban", value:"phongban_ma", text:"phongban_ten" });
+    const nvByMa = {}; nvRows.forEach(n => nvByMa[n.nhanvien_ma] = n);
+    extraCols.push({ label:"Tên công cụ (tổng hợp)", fn: r => computeCongCuTen(r, specRows) });
+    extraCols.push({ label:"Phòng ban (theo người đang giữ)", fn: r => { const nv = nvByMa[r.nhanvien_ma]; return nv ? (pbMap[nv.phongban_ma] || "") : ""; } });
+  }
+  if(sheet === "danhmuc_chitiet"){
+    const dmMap = await relationMap({ sheet:"danh_muc", value:"danh_muc_ma", text:"danh_muc_ten" });
+    extraCols.push({ label:"Tên danh mục cha", fn: r => dmMap[r.danh_muc_cha] || dmMap[normalizeCodeKey(r.danh_muc_cha)] || "" });
+  }
+  if(sheet === "thuoc_tinh"){
+    const dmMap = await relationMap({ sheet:"danh_muc", value:"danh_muc_ma", text:"danh_muc_ten" });
+    extraCols.push({ label:"Tên danh mục", fn: r => dmMap[r.danh_muc_ma] || "" });
+  }
+  if(sheet === "lichsu_congcu"){
+    const [specRows, ccRows] = await Promise.all([apiList("thongso_kythuat"), apiList("cong_cu")]);
+    const ccByMa = {}; ccRows.forEach(c => ccByMa[c.cong_cu_ma] = c);
+    extraCols.push({ label:"Tên công cụ", fn: r => { const cc = ccByMa[r.cong_cu_ma]; return cc ? computeCongCuTen(cc, specRows) : ""; } });
+  }
+
+  return rows.map(r => {
+    const obj = {};
+    rawFields.forEach(f => {
+      const rawVal = r[f];
+      obj[L(f, sheet)] = rawVal == null ? "" : (NUMBER_FIELDS.has(f) ? (Number(String(rawVal).replace(/[^\d.-]/g,"")) || rawVal) : rawVal);
+      if(relMaps[f]){
+        const resolved = relMaps[f][rawVal] || relMaps[f][normalizeCodeKey(rawVal)] || "";
+        obj[`${L(f, sheet)} (Tên)`] = resolved;
+      }
+    });
+    extraCols.forEach(c => { obj[c.label] = c.fn(r) || ""; });
+    return obj;
+  });
+}
+
+async function exportListToExcel(){
+  if(typeof XLSX === "undefined"){
+    toast("Không tải được thư viện xuất Excel (kiểm tra kết nối mạng), vui lòng thử lại.", true);
+    return;
+  }
+  const sheet = currentSheet;
+  const cfg = CONFIG[sheet];
+  const btn = document.getElementById("exportBtn");
+  btn.disabled = true;
+  try{
+    let exportRows;
+    if(cfg.isHoaDon){
+      exportRows = hoaDonExportRows || [];
+    }else{
+      // xuất đúng theo bộ lọc/tìm kiếm/sắp xếp đang áp dụng trên màn hình hiện tại
+      const source = (filtered && filtered.length) ? filtered : (dataCache[sheet] || await apiList(sheet));
+      exportRows = await buildExportDataForSheet(sheet, source);
+    }
+    if(!exportRows.length){ toast("Không có dữ liệu để xuất", true); return; }
+    const ws = XLSX.utils.json_to_sheet(exportRows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, String(cfg.label).slice(0,31));
+    const stamp = new Date().toISOString().slice(0,19).replace(/[:T]/g,"-");
+    XLSX.writeFile(wb, `${sheet}_${stamp}.xlsx`);
+    toast("Đã xuất file Excel thành công");
+  }catch(err){
+    toast("Xuất Excel thất bại: " + err.message, true);
+  }finally{
+    btn.disabled = false;
+  }
+}
+document.getElementById("exportBtn").onclick = exportListToExcel;
+
 document.getElementById("searchInput").addEventListener("input", async ()=>{
   page = 1;
   const rows = await apiList(currentSheet);
@@ -1917,6 +2022,13 @@ async function openForm(id){
       if(rel){
         const found = relOptions[f].find(o=>String(o.value)===String(val));
         const displayText = found ? found.text : (val ? String(val) : "");
+        if(isLockedPk){
+          // khoá chính đồng thời là khoá ngoại (vd nhanvien_ma/ma_qua_tang trong
+          // qua_tang) và đang ở chế độ sửa -> không cho nháy đúp đổi giá trị
+          return `<div class="field"><label>${L(f, currentSheet)} <span class="field-hint">(khoá chính, không thể đổi)</span></label>
+            <input type="hidden" data-field="${f}" value="${escAttr(val)}">
+            <input type="text" value="${escAttr(displayText)}" readonly></div>`;
+        }
         return `<div class="field"><label>${L(f, currentSheet)}</label>
           <input type="hidden" data-field="${f}" value="${escAttr(val)}">
           <input type="text" data-rel-display="${f}" value="${escAttr(displayText)}" readonly
@@ -2544,6 +2656,18 @@ async function renderHoaDon(){
     return [ten, h.nhan_vien_ten, h.nhan_vien_ma, h.ngay_sua, h.trang_thai].some(v=>v && String(v).toLowerCase().includes(q));
   });
 
+  hoaDonExportRows = filteredHd.map(h => {
+    const cc = ccMap[h.cong_cu_ma] || {};
+    const ten = cc.cong_cu_ma ? computeCongCuTen(cc, specRows) : h.cong_cu_ma;
+    const obj = {};
+    Object.keys(h).forEach(k => { if(k !== "_row") obj[L(k, "lichsu_congcu")] = h[k] ?? ""; });
+    obj["Tên công cụ"] = ten || "";
+    obj["Giá trị tài sản (VNĐ)"] = cc.gia_tri || "";
+    obj["Khu vực công cụ"] = cc.khu_vuc || "";
+    obj["Tình trạng khi nhận"] = cc.tinhtrang_khinhan || "";
+    return obj;
+  });
+
   const rowsHtml = filteredHd.map(h => {
     const cc = ccMap[h.cong_cu_ma];
     const ten = cc ? computeCongCuTen(cc, specRows) : h.cong_cu_ma;
@@ -2787,6 +2911,13 @@ function spFieldEdit(f, val, isPk, sheet){
   if(rel){
     const relMap = (spState.relMaps||{})[f] || {};
     const displayText = (val!=null && relMap[val]) ? `${relMap[val]} (${val})` : (val!=null ? String(val) : "");
+    if(isPk){
+      // đang sửa bản ghi có sẵn -> khoá chính (kể cả khi đồng thời là khoá ngoại,
+      // vd nhanvien_ma/ma_qua_tang) không được phép đổi qua thao tác nháy đúp
+      return `<div class="field"><label>${L(f, sheet)} <span class="field-hint">(khoá chính, không thể đổi)</span></label>
+        <input type="hidden" data-spfield="${f}" value="${escAttr(val ?? "")}">
+        <input type="text" value="${escAttr(displayText)}" readonly></div>`;
+    }
     return `<div class="field"><label>${L(f, sheet)}</label>
       <input type="hidden" data-spfield="${f}" value="${escAttr(val ?? "")}">
       <input type="text" data-rel-display="${f}" value="${escAttr(displayText)}" readonly
