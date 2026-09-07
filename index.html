@@ -858,6 +858,7 @@ let activeFilter = null;   // {label, predicate} khi drill-down từ Tổng quan
 let quickFilters = {};     // { fieldName: selectedValue } - bộ lọc nhanh theo cột trên mỗi danh sách
 let sortState = {};        // { sheetName: { field, dir:"asc"|"desc" } } - sắp xếp theo cột trên mỗi danh sách
 let hoaDonExportRows = []; // dữ liệu Hoá đơn (đầy đủ cột) đang hiển thị, dùng khi bấm "Xuất Excel"
+let overviewExportData = null; // dữ liệu Tổng quan (đầy đủ, không giới hạn top 6) dùng khi bấm "Xuất Excel"
 
 /* ---------- gọi API bằng fetch() ----------
    TRƯỚC ĐÂY: dùng JSONP (thẻ <script src="...">) để né lỗi CORS khi mở file
@@ -1227,7 +1228,7 @@ async function switchSheet(key, filter){
   document.getElementById("addBtn").style.display = hideToolbar ? "none" : "inline-flex";
   document.querySelector(".search-box").style.display = hideToolbar ? "none" : "flex";
   document.querySelector(".ledger .foot-row").style.display = hideToolbar ? "none" : "flex";
-  const canExport = !!(cfg.table || cfg.isHoaDon);
+  const canExport = !!(cfg.table || cfg.isHoaDon || cfg.isOverview);
   document.getElementById("exportBtn").style.display = canExport ? "inline-flex" : "none";
   document.querySelector(".ledger").classList.toggle("plain", !!cfg.isOverview);
   if(cfg.isOverview){
@@ -1782,6 +1783,29 @@ async function exportListToExcel(){
   const btn = document.getElementById("exportBtn");
   btn.disabled = true;
   try{
+    const stamp = new Date().toISOString().slice(0,19).replace(/[:T]/g,"-");
+
+    // Tổng quan: xuất workbook NHIỀU SHEET (KPI + từng bảng breakdown đầy đủ,
+    // không giới hạn top 6 như hiển thị trên dashboard)
+    if(cfg.isOverview){
+      if(!overviewExportData){ toast("Chưa có dữ liệu tổng quan để xuất, vui lòng đợi trang tải xong.", true); return; }
+      const wb = XLSX.utils.book_new();
+      const addSheet = (rows, name) => {
+        if(!rows || !rows.length) return;
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), name.slice(0,31));
+      };
+      addSheet(overviewExportData.kpis.map(k=>({ "Chỉ số": k.label, "Giá trị": k.value })), "Chỉ số tổng quan");
+      addSheet(overviewExportData.phongBanNhanSu, "Phòng ban - Nhân sự");
+      addSheet(overviewExportData.phongBanCongCu, "Phòng ban - Công cụ");
+      addSheet(overviewExportData.congCuLichSu, "Công cụ - Lịch sử sửa");
+      addSheet(overviewExportData.chiPhiThang, "Chi phí sửa theo tháng");
+      addSheet(overviewExportData.bienDongNhanSu, "Biến động NS theo tháng");
+      if(!wb.SheetNames.length){ toast("Không có dữ liệu để xuất", true); return; }
+      XLSX.writeFile(wb, `tong_quan_${stamp}.xlsx`);
+      toast("Đã xuất file Excel thành công");
+      return;
+    }
+
     let exportRows;
     if(cfg.isHoaDon){
       exportRows = hoaDonExportRows || [];
@@ -1794,7 +1818,6 @@ async function exportListToExcel(){
     const ws = XLSX.utils.json_to_sheet(exportRows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, String(cfg.label).slice(0,31));
-    const stamp = new Date().toISOString().slice(0,19).replace(/[:T]/g,"-");
     XLSX.writeFile(wb, `${sheet}_${stamp}.xlsx`);
     toast("Đã xuất file Excel thành công");
   }catch(err){
@@ -2242,8 +2265,8 @@ async function renderOverview(forceReload){
     ["nhan_vien","phong_ban","cong_cu","lichsu_congcu"].forEach(s => delete dataCache[s]);
   }
 
-  const [nvRows, pbRows, ccRows, hisRows] = await Promise.all([
-    apiList("nhan_vien"), apiList("phong_ban"), apiList("cong_cu"), apiList("lichsu_congcu")
+  const [nvRows, pbRows, ccRows, hisRows, specRowsOv] = await Promise.all([
+    apiList("nhan_vien"), apiList("phong_ban"), apiList("cong_cu"), apiList("lichsu_congcu"), apiList("thongso_kythuat")
   ]);
   const pbName = {}; pbRows.forEach(p => { pbName[p.phongban_ma] = p.phongban_ten; });
 
@@ -2270,6 +2293,12 @@ async function renderOverview(forceReload){
   const topHis = Object.entries(hisByCc).sort((a,b)=>b[1]-a[1]).slice(0,6);
   const maxHis = topHis.length ? topHis[0][1] : 1;
 
+  // ---- danh sách ĐẦY ĐỦ (không cắt top 6) để phục vụ xuất Excel ----
+  const allPbNhanSu = Object.entries(nvByPb).sort((a,b)=>b[1]-a[1]);
+  const allPbCongCu = Object.entries(ccByPb).sort((a,b)=>b[1]-a[1]);
+  const allHisCc = Object.entries(hisByCc).sort((a,b)=>b[1]-a[1]);
+  const ccByMaMap = {}; ccRows.forEach(cc => { ccByMaMap[cc.cong_cu_ma] = cc; });
+
   const barRow = (label, count, max, onclick) => `
     <div class="ov-row" ${onclick?`onclick="${onclick}" style="cursor:pointer;"`:""}>
       <div class="ov-row-top"><span>${label}${onclick?'<span class="ov-arrow">→</span>':''}</span><span>${count}</span></div>
@@ -2286,6 +2315,24 @@ async function renderOverview(forceReload){
     .reduce((s,h)=> s + (Number(String(h.chi_phi_sua||"").replace(/[^\d.-]/g,""))||0), 0));
   const vaoByMonth = monthKeys.map(mk => nvRows.filter(nv => vnDateMonthKey(nv.ngay_thu_viec) === mk).length);
   const raByMonth = monthKeys.map(mk => nvRows.filter(nv => vnDateMonthKey(nv.ngay_nghi_viec) === mk).length);
+
+  overviewExportData = {
+    kpis: [
+      { label:"Nhân sự đang làm việc", value: dangLamViec },
+      { label:"Công cụ dụng cụ đang quản lý", value: ccRows.length },
+      { label:"Phòng ban / đơn vị", value: pbRows.length },
+      { label:"Tổng chi phí sửa chữa (VNĐ)", value: tongChiPhiSua }
+    ],
+    phongBanNhanSu: allPbNhanSu.map(([k,v]) => ({ "Phòng ban": pbName[k]||k, "Số nhân sự": v })),
+    phongBanCongCu: allPbCongCu.map(([k,v]) => ({ "Phòng ban": pbName[k]||k, "Số công cụ": v })),
+    congCuLichSu: allHisCc.map(([k,v]) => ({
+      "Mã công cụ": k,
+      "Tên công cụ": ccByMaMap[k] ? computeCongCuTen(ccByMaMap[k], specRowsOv) : k,
+      "Số lần lịch sử": v
+    })),
+    chiPhiThang: monthKeys.map((mk,i) => ({ "Tháng": mk, "Chi phí sửa (VNĐ)": chiPhiByMonth[i] })),
+    bienDongNhanSu: monthKeys.map((mk,i) => ({ "Tháng": mk, "Vào làm": vaoByMonth[i], "Nghỉ việc": raByMonth[i] }))
+  };
 
   document.getElementById("ovContent").innerHTML = `
     <div class="ov-kpis">
