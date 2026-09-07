@@ -792,12 +792,13 @@ const CONFIG = {
   qua_tang: {
     label:"Quà tặng/Đồng phục", desc:"Quà tặng, đồng phục đã phát cho nhân sự",
     icon:iconGift(), pk:["nhanvien_ma","ma_qua_tang"],
-    table:["nhanvien_ma","ma_qua_tang","ngay_phat"],
+    table:["nhanvien_ma","phongban_ten","ma_qua_tang","ngay_phat"],
     sections:[{title:"Thông tin phát quà/đồng phục", fields:["nhanvien_ma","ma_qua_tang","ngay_phat"]}],
     relations:{
       nhanvien_ma:{sheet:"nhan_vien", value:"nhanvien_ma", text:"nhanvien_ten", autofill:{nhanvien_ten:"nhanvien_ten"}},
       ma_qua_tang:{sheet:"danh_muc", value:"danh_muc_ma", text:"danh_muc_ten", filter:r=>isQuaTangNhom(r.nhom)}
-    }
+    },
+    filters:["phongban_ma","ma_qua_tang"]
   },
   giay_to: {
     label:"Giấy tờ", desc:"Biên bản bàn giao và hoá đơn liên quan công cụ dụng cụ",
@@ -1272,7 +1273,7 @@ async function applyFilter(rows){
   let base = activeFilter ? rows.filter(activeFilter.predicate) : rows.slice();
 
   let nvMap = null;
-  if(currentSheet === "cong_cu" && quickFilters.phongban_ma){
+  if((currentSheet === "cong_cu" || currentSheet === "qua_tang") && quickFilters.phongban_ma){
     const nvRows = await apiList("nhan_vien");
     nvMap = {}; nvRows.forEach(n => nvMap[n.nhanvien_ma] = n);
   }
@@ -1583,17 +1584,18 @@ async function renderTable(){
     if(!filterRelMaps[f] && cfg.relations && cfg.relations[f]) filterRelMaps[f] = await relationMap(cfg.relations[f]);
   }
 
-  // option cho bộ lọc phòng ban của công cụ dụng cụ: join qua nhân viên (vì cong_cu chỉ lưu nhanvien_ma)
+  // option cho bộ lọc phòng ban của công cụ dụng cụ / quà tặng-đồng phục: join qua nhân
+  // viên (vì các sheet này chỉ lưu nhanvien_ma, không lưu trực tiếp phongban_ma)
   let extraOptions = {};
-  if(currentSheet === "cong_cu" && cfg.filters.includes("phongban_ma")){
+  if((currentSheet === "cong_cu" || currentSheet === "qua_tang") && cfg.filters.includes("phongban_ma")){
     const nvRows = await apiList("nhan_vien");
     const pbRows = await apiList("phong_ban");
     const pbName = {}; pbRows.forEach(p => pbName[p.phongban_ma] = p.phongban_ten);
     const nvByMa = {}; nvRows.forEach(nv => nvByMa[nv.nhanvien_ma] = nv);
-    const ccAllRows = dataCache["cong_cu"] || [];
+    const allRows = dataCache[currentSheet] || [];
     const seen = new Set();
-    extraOptions.phongban_ma = ccAllRows
-      .map(cc => nvByMa[cc.nhanvien_ma]?.phongban_ma)
+    extraOptions.phongban_ma = allRows
+      .map(r => nvByMa[r.nhanvien_ma]?.phongban_ma)
       .filter(v => v && !seen.has(v) && seen.add(v))
       .map(v => ({ value:v, text: pbName[v] || v }))
       .sort((a,b) => String(a.text).localeCompare(String(b.text)));
@@ -1629,16 +1631,17 @@ async function renderTable(){
     dmTenMap = await relationMap({ sheet:"danhmuc_chitiet", value:"danh_muc_ma", text:"danh_muc_ten" });
   }
 
-  // trường ảo "phongban_ten" cho công cụ dụng cụ: join qua nhân viên -> phòng ban
+  // trường ảo "phongban_ten" cho công cụ dụng cụ / quà tặng-đồng phục: join qua nhân
+  // viên -> phòng ban (2 sheet này chỉ lưu nhanvien_ma, không lưu trực tiếp phongban_ma)
   let ccPhongBanByNV = null;
   let ccTenMap = null;
+  if(cfg.table.includes("phongban_ten")){
+    const nvRows = await apiList("nhan_vien");
+    const pbMap = await relationMap({ sheet:"phong_ban", value:"phongban_ma", text:"phongban_ten" });
+    ccPhongBanByNV = {};
+    nvRows.forEach(nv => { ccPhongBanByNV[nv.nhanvien_ma] = pbMap[nv.phongban_ma] || null; });
+  }
   if(currentSheet === "cong_cu"){
-    if(cfg.table.includes("phongban_ten")){
-      const nvRows = await apiList("nhan_vien");
-      const pbMap = await relationMap({ sheet:"phong_ban", value:"phongban_ma", text:"phongban_ten" });
-      ccPhongBanByNV = {};
-      nvRows.forEach(nv => { ccPhongBanByNV[nv.nhanvien_ma] = pbMap[nv.phongban_ma] || null; });
-    }
     if(cfg.table.includes("cong_cu_ten")){
       const specRows = await apiList("thongso_kythuat");
       ccTenMap = {};
@@ -1743,6 +1746,12 @@ async function buildExportDataForSheet(sheet, rowsInput){
     const nvByMa = {}; nvRows.forEach(n => nvByMa[n.nhanvien_ma] = n);
     extraCols.push({ label:"Tên công cụ (tổng hợp)", fn: r => computeCongCuTen(r, specRows) });
     extraCols.push({ label:"Phòng ban (theo người đang giữ)", fn: r => { const nv = nvByMa[r.nhanvien_ma]; return nv ? (pbMap[nv.phongban_ma] || "") : ""; } });
+  }
+  if(sheet === "qua_tang"){
+    const nvRows = await apiList("nhan_vien");
+    const pbMap = await relationMap({ sheet:"phong_ban", value:"phongban_ma", text:"phongban_ten" });
+    const nvByMa = {}; nvRows.forEach(n => nvByMa[n.nhanvien_ma] = n);
+    extraCols.push({ label:"Phòng ban", fn: r => { const nv = nvByMa[r.nhanvien_ma]; return nv ? (pbMap[nv.phongban_ma] || "") : ""; } });
   }
   if(sheet === "danhmuc_chitiet"){
     const dmMap = await relationMap({ sheet:"danh_muc", value:"danh_muc_ma", text:"danh_muc_ten" });
