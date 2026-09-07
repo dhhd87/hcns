@@ -206,7 +206,7 @@
   .overlay{
     position:fixed;inset:0;background:rgba(29,46,34,.42);
     display:none;align-items:flex-start;justify-content:center;
-    padding:36px 16px;overflow-y:auto;z-index:50;
+    padding:36px 16px;overflow-y:auto;z-index:65; /* > .side-panel-overlay (55) để picker/hoá đơn mở từ trong panel chi tiết luôn nổi lên trên, không bị panel che mất */
   }
   .overlay.show{display:flex;}
   .modal{
@@ -2879,7 +2879,7 @@ async function openRelFieldPicker(sheet, field, displayEl){
   const relCfg = (cfg.relations||{})[field];
   if(!relCfg) return;
   const scopeRoot = displayEl.closest("#formBody") || displayEl.closest("#spBody");
-  const hiddenEl = scopeRoot.querySelector(`[data-field="${field}"], [data-spfield="${field}"]`);
+  const hiddenEl = scopeRoot.querySelector(`[data-field="${field}"], [data-spfield="${field}"], [data-hfield="${field}"]`);
   await openRelPicker(relCfg, L(field, sheet), (rec)=>{
     if(!rec) return;
     const value = rec[relCfg.value];
@@ -2888,7 +2888,7 @@ async function openRelFieldPicker(sheet, field, displayEl){
     displayEl.value = text;
     if(relCfg.autofill){
       Object.entries(relCfg.autofill).forEach(([targetField, srcField])=>{
-        const targetEl = scopeRoot.querySelector(`[data-field="${targetField}"], [data-spfield="${targetField}"]`);
+        const targetEl = scopeRoot.querySelector(`[data-field="${targetField}"], [data-spfield="${targetField}"], [data-hfield="${targetField}"]`);
         if(targetEl) targetEl.value = rec[srcField] ?? "";
       });
     }
@@ -3120,7 +3120,15 @@ async function renderSpHistory(){
     </div>
     ${history.length ? history.map(h => `
       <div class="sp-history-item" onclick="openSpHistoryForm('${escAttr(h.lich_su_ma)}')">
-        <div class="sp-history-top"><b>${h.ngay_sua || "—"}</b><span class="tag honey">${h.trang_thai || "—"}</span></div>
+        <div class="sp-history-top">
+          <b>${h.ngay_sua || "—"}</b>
+          <span style="display:flex;align-items:center;gap:6px;">
+            <span class="tag honey">${h.trang_thai || "—"}</span>
+            ${h.hoadon_url ? `<button class="icon-btn" title="Xem hoá đơn" onclick="event.stopPropagation();openInvoiceImage('${escAttr(h.hoadon_url)}')">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2h12v19l-2.5-1.5L13 21l-2.5-1.5L8 21l-2-1.5z"/></svg>
+            </button>` : ""}
+          </span>
+        </div>
         <div class="muted" style="font-size:12.5px;">${h.ly_do_sua || "—"}${h.chi_phi_sua ? " · " + formatNumber(h.chi_phi_sua) + " đ" : ""}</div>
       </div>`).join("") : '<p class="muted">Chưa có lịch sử công cụ.</p>'}
   `;
@@ -3133,6 +3141,7 @@ async function openSpHistoryForm(hisId, forceEdit){
   const record = hisId ? rows.find(r => idOf(r, cfg.pk) === hisId) : { cong_cu_ma: spState.record.cong_cu_ma };
   const allFields = cfg.sections.flatMap(s => s.fields);
   const locked = !!hisId && !forceEdit; // bản ghi đã có: mặc định khoá, chỉ xem
+  const relMaps = await buildRelMaps("lichsu_congcu"); // để tra tên hiển thị cho các trường khoá ngoại (cong_cu_ma, nhan_vien_ma)
 
   // thêm mới: tự sinh Mã lịch sử (giống các sheet AUTO_CODE_SHEETS khác)
   let autoCode = null;
@@ -3154,6 +3163,28 @@ async function openSpHistoryForm(hisId, forceEdit){
         const pkNote = isLichSuMa ? ' <span class="field-hint">(tự sinh)</span>'
           : (isCongCuMa ? ' <span class="field-hint">(cố định theo công cụ đang xem)</span>' : '');
         if(locked && HIDDEN_IN_VIEW_FIELDS.has(f)) return "";
+        // trường khoá ngoại (vd nhan_vien_ma -> nhan_vien.nhanvien_ma): dùng đúng picker
+        // "nháy đúp để chọn" + tự động điền cột phụ (autofill, vd nhan_vien_ten), thay vì
+        // ô nhập chữ tự do như trước — tránh gõ nhầm mã không tồn tại, và giữ đồng bộ với
+        // cột nhan_vien_ten đang được dùng để hiển thị "Người đi sửa" ở màn Hoá đơn.
+        const rel = (cfg.relations || {})[f];
+        if(rel){
+          const displayText = (val != null && relMaps[f] && relMaps[f][val]) ? `${relMaps[f][val]} (${val})` : (val != null ? String(val) : "");
+          if(fieldLocked){
+            return `<div class="field"><label>${L(f, "lichsu_congcu")}${pkNote}</label>
+              <input type="hidden" data-hfield="${f}" value="${escAttr(val)}">
+              <input type="text" value="${escAttr(displayText)}" readonly></div>`;
+          }
+          const autofillHidden = rel.autofill ? Object.entries(rel.autofill).map(([tf]) =>
+            `<input type="hidden" data-hfield="${tf}" value="${escAttr(record[tf] ?? "")}">`).join("") : "";
+          return `<div class="field"><label>${L(f, "lichsu_congcu")}</label>
+            <input type="hidden" data-hfield="${f}" value="${escAttr(val)}">
+            ${autofillHidden}
+            <input type="text" data-rel-display="${f}" value="${escAttr(displayText)}" readonly
+              placeholder="Nháy đúp để chọn ${L(f, "lichsu_congcu").toLowerCase()}"
+              ondblclick="openRelFieldPicker('lichsu_congcu','${f}', this)">
+            <span class="field-hint-dbl">Nháy đúp vào ô để chọn từ danh sách</span></div>`;
+        }
         if(LONGTEXT_FIELDS.has(f)) return `<div class="field full"><label>${L(f, "lichsu_congcu")}</label><textarea data-hfield="${f}" ${locked?"disabled":""}>${val}</textarea></div>`;
         if(URL_FIELDS.has(f)) return imageFieldBlockHtml("data-hfield", f, "lichsu_congcu", val, locked);
         if(DATE_FIELDS_HINT(f)) return `<div class="field"><label>${L(f, "lichsu_congcu")}</label><input type="date" data-hfield="${f}" data-datefield="1" value="${vnToIso(val)}" ${locked?"disabled":""}></div>`;
