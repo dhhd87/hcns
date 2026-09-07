@@ -671,7 +671,7 @@ const LABELS = {
   danh_muc_ten:"Tên danh mục", nhom:"Nhóm", hinh_thuc:"Hình thức", ten_nhom:"Tên nhóm lớn",
   danh_muc_cha:"Thuộc danh mục cha", danh_muc_cha_ten:"Tên danh mục cha",
   danh_muc_ma_ten:"Tên danh mục",
-  ma_qua_tang:"Quà tặng", ngay_phat:"Ngày phát quà",
+  ma_qua_tang:"Quà tặng/Đồng phục", ngay_phat:"Ngày phát quà",
   hoadon_url:"Hoá đơn (ảnh/URL)"
 };
 /* nhãn riêng theo từng sheet, ưu tiên hơn nhãn dùng chung ở trên (tránh nhầm lẫn
@@ -680,6 +680,20 @@ const LABEL_OVERRIDES = {
   lichsu_congcu: { trang_thai: "Trạng thái sửa chữa" }
 };
 const L = (k, sheet) => (sheet && LABEL_OVERRIDES[sheet] && LABEL_OVERRIDES[sheet][k]) || LABELS[k] || k;
+
+/* Nhóm nào (cột nhom trong sheet danh_muc) được coi là "Quà tặng/Đồng phục"?
+   Dữ liệu thực tế: nhom là mã CỐ ĐỊNH riêng biệt (CCDC, TSCD, QT, DP...),
+   không có tiền tố chung -> whitelist theo tiền tố (bản trước) sai với DP.
+   Đổi sang BLACKLIST: loại trừ 2 nhóm chắc chắn KHÔNG PHẢI quà tặng (CCDC =
+   công cụ dụng cụ, TSCD = tài sản cố định, vốn được dùng ở nơi khác trong
+   app - sheet cong_cu/thongso_kythuat). Bất kỳ mã nhom nào KHÁC 2 mã này
+   (QT, DP, hoặc nhóm mới thêm sau này như quà Tết, quà sinh nhật...) đều tự
+   động được xem là quà tặng/đồng phục - không cần sửa code khi thêm nhóm mới,
+   chỉ cần sửa mảng này nếu sau này có thêm nhóm KHÔNG PHẢI quà tặng khác. */
+const KHONG_PHAI_QUA_TANG_NHOM = ["CCDC","TSCD"];
+function isQuaTangNhom(nhom){
+  return !KHONG_PHAI_QUA_TANG_NHOM.includes(String(nhom||"").trim().toUpperCase());
+}
 
 /* ---------- cấu hình các module (sheet) ---------- */
 const CONFIG = {
@@ -769,13 +783,13 @@ const CONFIG = {
     filters:["danh_muc_ma"]
   },
   qua_tang: {
-    label:"Quà tặng", desc:"Quà tặng đã phát cho nhân sự",
+    label:"Quà tặng/Đồng phục", desc:"Quà tặng, đồng phục đã phát cho nhân sự",
     icon:iconGift(), pk:["nhanvien_ma","ma_qua_tang"],
     table:["nhanvien_ma","ma_qua_tang","ngay_phat"],
-    sections:[{title:"Thông tin phát quà", fields:["nhanvien_ma","ma_qua_tang","ngay_phat"]}],
+    sections:[{title:"Thông tin phát quà/đồng phục", fields:["nhanvien_ma","ma_qua_tang","ngay_phat"]}],
     relations:{
       nhanvien_ma:{sheet:"nhan_vien", value:"nhanvien_ma", text:"nhanvien_ten", autofill:{nhanvien_ten:"nhanvien_ten"}},
-      ma_qua_tang:{sheet:"danh_muc", value:"danh_muc_ma", text:"danh_muc_ten", filter:r=>r.nhom==="QT"}
+      ma_qua_tang:{sheet:"danh_muc", value:"danh_muc_ma", text:"danh_muc_ten", filter:r=>isQuaTangNhom(r.nhom)}
     }
   },
   giay_to: {
@@ -1327,9 +1341,14 @@ function normalizeCodeKey(v){
 
 async function relationMap(relCfg){
   const rows = await apiList(relCfg.sheet);
-  const list = relCfg.filter ? rows.filter(relCfg.filter) : rows;
+  // LƯU Ý: hàm này build bản đồ mã->tên để HIỂN THỊ (bảng, panel chi tiết...),
+  // nên KHÔNG áp dụng relCfg.filter ở đây — filter chỉ nên dùng để thu hẹp
+  // DANH SÁCH CHỌN khi thêm mới (xem openForm/openRelPicker), không phải để
+  // giới hạn việc tra tên. Nếu lọc ở đây, mã nào không khớp filter (ví dụ do
+  // sau này đổi/thêm nhóm mới) sẽ chỉ hiện mã thô thay vì tên — đúng lỗi đã
+  // gặp với "DP0000001". Luôn build đầy đủ để tra tên chính xác dù thuộc nhóm nào.
   const map = {};
-  list.forEach(r => {
+  rows.forEach(r => {
     map[r[relCfg.value]] = r[relCfg.text];
     map[String(r[relCfg.value]||"").trim()] = r[relCfg.text];
     map[normalizeCodeKey(r[relCfg.value])] = r[relCfg.text];
