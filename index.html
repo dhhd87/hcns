@@ -1782,6 +1782,24 @@ async function buildExportDataForSheet(sheet, rowsInput){
   });
 }
 
+/* Tự tính độ rộng cột Excel theo nội dung dài nhất trong từng cột (kể cả tiêu đề),
+   để khi mở file không phải tự kéo giãn từng cột. Giới hạn tối thiểu/tối đa để
+   tránh cột quá hẹp (số ngắn) hoặc quá rộng (ghi chú dài). */
+function excelAutoFitCols(rows){
+  if(!rows || !rows.length) return [];
+  const keys = Object.keys(rows[0]);
+  return keys.map(key=>{
+    let maxLen = String(key).length;
+    rows.forEach(r=>{
+      const v = r[key];
+      if(v==null || v==="") return;
+      const len = String(v).length;
+      if(len>maxLen) maxLen = len;
+    });
+    return { wch: Math.min(60, Math.max(10, maxLen + 2)) };
+  });
+}
+
 async function exportListToExcel(){
   if(typeof XLSX === "undefined"){
     toast("Không tải được thư viện xuất Excel (kiểm tra kết nối mạng), vui lòng thử lại.", true);
@@ -1801,12 +1819,15 @@ async function exportListToExcel(){
       const wb = XLSX.utils.book_new();
       const addSheet = (rows, name) => {
         if(!rows || !rows.length) return;
-        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), name.slice(0,31));
+        const ws = XLSX.utils.json_to_sheet(rows);
+        ws['!cols'] = excelAutoFitCols(rows);
+        XLSX.utils.book_append_sheet(wb, ws, name.slice(0,31));
       };
       addSheet(overviewExportData.kpis.map(k=>({ "Chỉ số": k.label, "Giá trị": k.value })), "Chỉ số tổng quan");
       addSheet(overviewExportData.phongBanNhanSu, "Phòng ban - Nhân sự");
       addSheet(overviewExportData.phongBanCongCu, "Phòng ban - Công cụ");
       addSheet(overviewExportData.congCuLichSu, "Công cụ - Lịch sử sửa");
+      addSheet(overviewExportData.quaTangLoai, "Quà tặng - Đồng phục");
       addSheet(overviewExportData.chiPhiThang, "Chi phí sửa theo tháng");
       addSheet(overviewExportData.bienDongNhanSu, "Biến động NS theo tháng");
       if(!wb.SheetNames.length){ toast("Không có dữ liệu để xuất", true); return; }
@@ -1825,6 +1846,7 @@ async function exportListToExcel(){
     }
     if(!exportRows.length){ toast("Không có dữ liệu để xuất", true); return; }
     const ws = XLSX.utils.json_to_sheet(exportRows);
+    ws['!cols'] = excelAutoFitCols(exportRows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, String(cfg.label).slice(0,31));
     XLSX.writeFile(wb, `${sheet}_${stamp}.xlsx`);
@@ -2271,13 +2293,15 @@ async function renderOverview(forceReload){
   }
 
   if(forceReload){
-    ["nhan_vien","phong_ban","cong_cu","lichsu_congcu"].forEach(s => delete dataCache[s]);
+    ["nhan_vien","phong_ban","cong_cu","lichsu_congcu","qua_tang"].forEach(s => delete dataCache[s]);
   }
 
-  const [nvRows, pbRows, ccRows, hisRows, specRowsOv] = await Promise.all([
-    apiList("nhan_vien"), apiList("phong_ban"), apiList("cong_cu"), apiList("lichsu_congcu"), apiList("thongso_kythuat")
+  const [nvRows, pbRows, ccRows, hisRows, specRowsOv, qtRows, dmAllRowsOv] = await Promise.all([
+    apiList("nhan_vien"), apiList("phong_ban"), apiList("cong_cu"), apiList("lichsu_congcu"), apiList("thongso_kythuat"),
+    apiList("qua_tang"), apiList("danh_muc")
   ]);
   const pbName = {}; pbRows.forEach(p => { pbName[p.phongban_ma] = p.phongban_ten; });
+  const qtLoaiName = {}; dmAllRowsOv.forEach(d => { qtLoaiName[d.danh_muc_ma] = d.danh_muc_ten; });
 
   // nhân sự theo phòng ban
   const nvByPb = {};
@@ -2302,10 +2326,17 @@ async function renderOverview(forceReload){
   const topHis = Object.entries(hisByCc).sort((a,b)=>b[1]-a[1]).slice(0,6);
   const maxHis = topHis.length ? topHis[0][1] : 1;
 
+  // quà tặng/đồng phục: loại phát nhiều nhất
+  const qtByLoai = {};
+  qtRows.forEach(q => { const k = q.ma_qua_tang || "—"; qtByLoai[k] = (qtByLoai[k]||0) + 1; });
+  const topQt = Object.entries(qtByLoai).sort((a,b)=>b[1]-a[1]).slice(0,6);
+  const maxQt = topQt.length ? topQt[0][1] : 1;
+
   // ---- danh sách ĐẦY ĐỦ (không cắt top 6) để phục vụ xuất Excel ----
   const allPbNhanSu = Object.entries(nvByPb).sort((a,b)=>b[1]-a[1]);
   const allPbCongCu = Object.entries(ccByPb).sort((a,b)=>b[1]-a[1]);
   const allHisCc = Object.entries(hisByCc).sort((a,b)=>b[1]-a[1]);
+  const allQtLoai = Object.entries(qtByLoai).sort((a,b)=>b[1]-a[1]);
   const ccByMaMap = {}; ccRows.forEach(cc => { ccByMaMap[cc.cong_cu_ma] = cc; });
 
   const barRow = (label, count, max, onclick) => `
@@ -2330,7 +2361,8 @@ async function renderOverview(forceReload){
       { label:"Nhân sự đang làm việc", value: dangLamViec },
       { label:"Công cụ dụng cụ đang quản lý", value: ccRows.length },
       { label:"Phòng ban / đơn vị", value: pbRows.length },
-      { label:"Tổng chi phí sửa chữa (VNĐ)", value: tongChiPhiSua }
+      { label:"Tổng chi phí sửa chữa (VNĐ)", value: tongChiPhiSua },
+      { label:"Lượt phát quà tặng/đồng phục", value: qtRows.length }
     ],
     phongBanNhanSu: allPbNhanSu.map(([k,v]) => ({ "Phòng ban": pbName[k]||k, "Số nhân sự": v })),
     phongBanCongCu: allPbCongCu.map(([k,v]) => ({ "Phòng ban": pbName[k]||k, "Số công cụ": v })),
@@ -2339,6 +2371,7 @@ async function renderOverview(forceReload){
       "Tên công cụ": ccByMaMap[k] ? computeCongCuTen(ccByMaMap[k], specRowsOv) : k,
       "Số lần lịch sử": v
     })),
+    quaTangLoai: allQtLoai.map(([k,v]) => ({ "Mã quà tặng/đồng phục": k, "Tên quà tặng/đồng phục": qtLoaiName[k]||k, "Số lượt phát": v })),
     chiPhiThang: monthKeys.map((mk,i) => ({ "Tháng": mk, "Chi phí sửa (VNĐ)": chiPhiByMonth[i] })),
     bienDongNhanSu: monthKeys.map((mk,i) => ({ "Tháng": mk, "Vào làm": vaoByMonth[i], "Nghỉ việc": raByMonth[i] }))
   };
@@ -2353,6 +2386,8 @@ async function renderOverview(forceReload){
         <div class="num">${pbRows.length}</div><div class="lbl">Phòng ban / đơn vị</div></div>
       <div class="ov-kpi" style="cursor:pointer;" onclick="switchSheet('lichsu_congcu')" title="Xem lịch sử sửa chữa">
         <div class="num">${formatNumber(tongChiPhiSua)}</div><div class="lbl">Tổng chi phí sửa chữa (VNĐ)</div></div>
+      <div class="ov-kpi" style="cursor:pointer;" onclick="switchSheet('qua_tang')" title="Xem danh sách quà tặng/đồng phục">
+        <div class="num">${qtRows.length}</div><div class="lbl">Lượt phát quà tặng/đồng phục</div></div>
     </div>
     <div class="ov-grid">
     <div class="ov-card">
@@ -2366,6 +2401,10 @@ async function renderOverview(forceReload){
     <div class="ov-card">
       <div class="ov-card-head"><h3>Công cụ có nhiều lịch sử công cụ nhất</h3><span>Bấm để xem chi tiết & lịch sử công cụ</span></div>
       ${topHis.map(([k,v]) => barRow(k, v, maxHis, `openRecordPanelHistory('${escAttr(k)}')`)).join("") || '<p class="muted">Chưa có lịch sử công cụ</p>'}
+    </div>
+    <div class="ov-card">
+      <div class="ov-card-head"><h3>Quà tặng/Đồng phục phát nhiều nhất</h3><span>Bấm để xem danh sách theo loại quà tặng/đồng phục</span></div>
+      ${topQt.map(([k,v]) => barRow(qtLoaiName[k]||k, v, maxQt, `filterBySheetField('qua_tang','ma_qua_tang','${escAttr(k)}','${escAttr(qtLoaiName[k]||k)}')`)).join("") || '<p class="muted">Chưa có dữ liệu</p>'}
     </div>
     <div class="ov-card" style="grid-column:1/-1;">
       <div class="ov-card-head"><h3>Chi phí sửa chữa theo tháng (12 tháng gần nhất)</h3><span>Tổng chi phí sửa chữa công cụ dụng cụ mỗi tháng</span></div>
