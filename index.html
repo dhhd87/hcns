@@ -871,6 +871,9 @@ const AUTO_CODE_SHEETS = ["cong_cu","thuoc_tinh","lichsu_congcu","danh_muc","dan
 /* ---------- state ---------- */
 let currentSheet = "tong_quan";
 let dataCache = {};        // { sheetName: rows[] }
+let relationMapCache = {}; // { "sheet|value|text": {ma->ten} } - cache map quan hệ, khỏi build lại mỗi lần render
+const LOCAL_CACHE_PREFIX = "hcns_cache_v1_"; // cache bền (localStorage) cho từng sheet, dùng theo kiểu SWR (stale-while-revalidate)
+let backgroundRefreshing = new Set(); // các sheet đang được tải ngầm lại (tránh gọi trùng)
 let filtered = [];
 let page = 1;
 const PAGE_SIZE = 100;
@@ -963,12 +966,78 @@ function promptEditPassword(message){
 }
 
 /* ---------- helpers gọi API ---------- */
+/* Chỉ mục tìm kiếm dạng chuỗi (gộp mọi giá trị của 1 dòng, viết thường) được
+   tính SẴN 1 LẦN khi dữ liệu được nạp vào cache, thay vì tính lại (duyệt qua
+   Object.values của từng dòng) mỗi lần gõ tìm kiếm -> tìm kiếm chỉ còn 1 phép
+   String.includes() trên chuỗi đã tính sẵn cho mỗi dòng. */
+function buildSearchIndex(row){
+  let s = "";
+  for(const k in row){
+    if(k === "_row" || k === "_searchIndex") continue;
+    const v = row[k];
+    if(v != null) s += String(v).toLowerCase() + " ";
+  }
+  return s;
+}
+function attachSearchIndex(rows){
+  rows.forEach(r => { r._searchIndex = buildSearchIndex(r); });
+  return rows;
+}
+function loadLocalCache(sheet){
+  try{
+    const raw = localStorage.getItem(LOCAL_CACHE_PREFIX + sheet);
+    if(!raw) return null;
+    const obj = JSON.parse(raw);
+    return (obj && Array.isArray(obj.rows)) ? obj : null;
+  }catch(e){ return null; }
+}
+function saveLocalCache(sheet, rows){
+  try{ localStorage.setItem(LOCAL_CACHE_PREFIX + sheet, JSON.stringify({ rows, ts: Date.now() })); }
+  catch(e){ /* bỏ qua nếu vượt quota localStorage */ }
+}
+/* Xoá sạch cache (bộ nhớ + localStorage + relationMap liên quan) của 1 sheet
+   khi dữ liệu sheet đó vừa thay đổi (ghi/sửa/xoá thành công) -> lần đọc kế
+   tiếp bắt buộc lấy lại dữ liệu mới nhất từ máy chủ. */
+function invalidateSheetCache(sheet){
+  delete dataCache[sheet];
+  try{ localStorage.removeItem(LOCAL_CACHE_PREFIX + sheet); }catch(e){}
+  Object.keys(relationMapCache).forEach(k => { if(k.startsWith(sheet + "|")) delete relationMapCache[k]; });
+}
+/* Tải lại 1 sheet ở NỀN (không chặn UI), dùng cho pattern SWR: dữ liệu cũ từ
+   localStorage được trả về ngay lập tức để hiển thị, đồng thời âm thầm xin
+   bản mới nhất từ máy chủ; nếu người dùng đang xem đúng sheet đó thì tự làm
+   mới lại bảng khi có dữ liệu mới. */
+async function refreshSheetInBackground(sheet){
+  if(backgroundRefreshing.has(sheet)) return;
+  backgroundRefreshing.add(sheet);
+  try{
+    const json = await apiGet("list", { sheet });
+    if(json.success){
+      dataCache[sheet] = attachSearchIndex(json.data);
+      saveLocalCache(sheet, json.data);
+      if(currentSheet === sheet && !document.getElementById("formOverlay").classList.contains("show")){
+        applyFilter(dataCache[sheet]);
+      }
+    }
+  }catch(e){ /* lỗi mạng khi tải ngầm -> im lặng, vẫn dùng dữ liệu cache cũ */ }
+  finally{ backgroundRefreshing.delete(sheet); }
+}
 async function apiList(sheet){
   if(dataCache[sheet]) return dataCache[sheet];
+  // SWR: nếu có bản cache cũ trong localStorage, dùng tạm ngay (khỏi chờ mạng)
+  // rồi âm thầm xin bản mới nhất ở nền -> mở trang lần sau cảm giác gần như
+  // tức thì thay vì luôn phải chờ round-trip lên Apps Script (vốn có độ trễ cao).
+  const local = loadLocalCache(sheet);
+  if(local && local.rows.length){
+    dataCache[sheet] = attachSearchIndex(local.rows);
+    refreshSheetInBackground(sheet);
+    return dataCache[sheet];
+  }
   const json = await apiGet("list", { sheet });
   if(!json.success) throw new Error(json.message || "Lỗi tải dữ liệu");
-  dataCache[sheet] = json.data;
-  return json.data;
+  dataCache[sheet] = attachSearchIndex(json.data);
+  saveLocalCache(sheet, json.data);
+  return dataCache[sheet];
 }
 /* Sinh mã kế tiếp HOÀN TOÀN Ở PHÍA TRÌNH DUYỆT, không gọi server (action=nextcode
    trước đây phải chờ round-trip mạng mỗi lần bấm "Thêm mới"). Vì mọi màn hình đều
@@ -1105,7 +1174,7 @@ async function processSyncQueue(){
       persistSyncQueue();
       // hết thao tác đang chờ cho sheet này -> nạp lại dữ liệu chuẩn từ máy chủ
       if(!syncQueue.some(o=>o.sheet===op.sheet)){
-        delete dataCache[op.sheet];
+        invalidateSheetCache(op.sheet);
         refreshCounts();
         if(currentSheet===op.sheet) loadTable();
       }
@@ -1118,6 +1187,7 @@ async function processSyncQueue(){
       }
       // lỗi logic (trùng mã, thiếu dữ liệu...) -> hoàn tác thay đổi cục bộ
       if(op.snapshot) dataCache[op.sheet] = op.snapshot; else delete dataCache[op.sheet];
+      Object.keys(relationMapCache).forEach(k => { if(k.startsWith(op.sheet + "|")) delete relationMapCache[k]; });
       toast(`Đồng bộ thất bại, đã hoàn tác: ${err.message}`, true);
       syncQueue.shift();
       persistSyncQueue();
@@ -1130,6 +1200,17 @@ async function processSyncQueue(){
 }
 
 function idOf(row, pk){ return pk.map(f=>row[f] ?? "").join("|"); }
+
+/* Gộp nhiều lần gọi liên tiếp (vd mỗi phím gõ) thành 1 lần, chỉ chạy sau khi
+   người dùng ngừng gõ "wait" ms - tránh apiList()+applyFilter()+renderTable()
+   chạy lại toàn bộ (kể cả quét _searchIndex qua mọi dòng) ở MỖI keystroke. */
+function debounce(fn, wait){
+  let timer;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), wait);
+  };
+}
 
 function toast(msg, isError, retryFn){
   const wrap = document.getElementById("toast-wrap");
@@ -1244,15 +1325,20 @@ function buildNav(){
   });
 }
 async function refreshCounts(){
-  for(const key of Object.keys(CONFIG)){
-    if(CONFIG[key].isOverview || CONFIG[key].isGroup || CONFIG[key].isBienBan || CONFIG[key].isHoaDon) continue;
+  // Chạy song song thay vì tuần tự (for...await) -> tải 1 loạt sheet cùng lúc
+  // khi khởi động, số đếm ở sidebar hiện ra nhanh hơn nhiều thay vì phải chờ
+  // hết sheet này đến sheet khác (mỗi round-trip Apps Script có độ trễ riêng).
+  const keys = Object.keys(CONFIG).filter(key =>
+    !CONFIG[key].isOverview && !CONFIG[key].isGroup && !CONFIG[key].isBienBan && !CONFIG[key].isHoaDon
+  );
+  await Promise.all(keys.map(async key => {
     try{
       const rows = await apiList(key);
       countsCache[key] = rows.length;
       const el = document.querySelector(`[data-count="${key}"]`);
       if(el) el.textContent = rows.length;
     }catch(e){ /* ignore silently for count */ }
-  }
+  }));
 }
 
 /* Đóng hết mọi overlay đang mở (form thêm/sửa, panel chi tiết, xem hoá đơn,
@@ -1367,7 +1453,7 @@ async function applyFilter(rows){
   });
 
   filtered = !q ? base : base.filter(r =>
-    Object.values(r).some(v => v!=null && String(v).toLowerCase().includes(q))
+    r._searchIndex ? r._searchIndex.includes(q) : Object.values(r).some(v => v!=null && String(v).toLowerCase().includes(q))
   );
   applySort();
   renderTable();
@@ -1598,6 +1684,12 @@ function normalizeCodeKey(v){
 }
 
 async function relationMap(relCfg){
+  // Cache theo (sheet|cột mã|cột tên): tránh build lại object map mỗi lần
+  // renderTable()/sort/chuyển trang gọi tới, dù dữ liệu gốc (apiList) đã cache.
+  // Được xoá cùng lúc với dataCache[sheet] trong invalidateSheetCache() khi có
+  // ghi/sửa/xoá thành công lên đúng sheet nguồn của quan hệ này.
+  const cacheKey = `${relCfg.sheet}|${relCfg.value}|${relCfg.text}`;
+  if(relationMapCache[cacheKey]) return relationMapCache[cacheKey];
   const rows = await apiList(relCfg.sheet);
   // LƯU Ý: hàm này build bản đồ mã->tên để HIỂN THỊ (bảng, panel chi tiết...),
   // nên KHÔNG áp dụng relCfg.filter ở đây — filter chỉ nên dùng để thu hẹp
@@ -1611,6 +1703,7 @@ async function relationMap(relCfg){
     map[String(r[relCfg.value]||"").trim()] = r[relCfg.text];
     map[normalizeCodeKey(r[relCfg.value])] = r[relCfg.text];
   });
+  relationMapCache[cacheKey] = map;
   return map;
 }
 
@@ -2011,11 +2104,11 @@ async function exportListToExcel(){
 }
 document.getElementById("exportBtn").onclick = exportListToExcel;
 
-document.getElementById("searchInput").addEventListener("input", async ()=>{
+document.getElementById("searchInput").addEventListener("input", debounce(async ()=>{
   page = 1;
   const rows = await apiList(currentSheet);
   applyFilter(rows);
-});
+}, 300));
 
 /* ---------- distinct values (gợi ý datalist) ---------- */
 function distinctValues(rows, field, max=25){
@@ -2451,7 +2544,7 @@ async function renderOverview(forceReload){
   }
 
   if(forceReload){
-    ["nhan_vien","phong_ban","cong_cu","lichsu_congcu","qua_tang"].forEach(s => delete dataCache[s]);
+    ["nhan_vien","phong_ban","cong_cu","lichsu_congcu","qua_tang"].forEach(s => invalidateSheetCache(s));
   }
 
   const [nvRows, pbRows, ccRows, hisRows, specRowsOv, qtRows, dmAllRowsOv] = await Promise.all([
@@ -2700,7 +2793,7 @@ async function saveBienBan(){
     data.bienban_ma = bienbanMa;
     const result = await apiWriteRemote(bbEditingMa ? "update" : "create", "bien_ban", bbEditingMa ? { id: bienbanMa, data } : { data });
     bbEditingMa = bienbanMa;
-    delete dataCache["bien_ban"];
+    invalidateSheetCache("bien_ban");
     toast("Đã lưu biên bản " + bienbanMa + " thành công");
   }catch(err){
     toast("Lưu biên bản thất bại: " + err.message, true, saveBienBan);
@@ -2713,7 +2806,7 @@ async function toggleBienBanSavedList(){
   if(wrap.dataset.open === "1"){ wrap.innerHTML = ""; wrap.dataset.open = "0"; return; }
   wrap.dataset.open = "1";
   wrap.innerHTML = `<div class="bb-doc" style="padding:16px 20px;margin-bottom:16px;"><div class="loading-row">Đang tải danh sách…</div></div>`;
-  delete dataCache["bien_ban"];
+  invalidateSheetCache("bien_ban");
   let rows;
   try{ rows = await apiList("bien_ban"); }catch(e){ rows = []; }
   rows = rows.slice().reverse();
@@ -2727,7 +2820,7 @@ async function toggleBienBanSavedList(){
   </div>`;
 }
 async function loadBienBanIntoForm(ma){
-  delete dataCache["bien_ban"];
+  invalidateSheetCache("bien_ban");
   const rows = await apiList("bien_ban");
   const rec = rows.find(r=>r.bienban_ma===ma);
   if(!rec){ toast("Không tìm thấy biên bản", true); return; }
@@ -2881,7 +2974,7 @@ async function renderHoaDon(){
       <input id="hoaDonSearch" type="text" placeholder="Tìm hoá đơn..." value="${escAttr(keepQBefore)}">
     </div>`;
   const sEl = document.getElementById("hoaDonSearch");
-  sEl.oninput = ()=> renderHoaDon();
+  sEl.oninput = debounce(()=> renderHoaDon(), 300);
   sEl.focus();
   sEl.setSelectionRange(caretPos, caretPos);
 
