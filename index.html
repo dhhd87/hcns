@@ -751,7 +751,7 @@ const LABELS = {
    khi cùng 1 tên cột nhưng ý nghĩa khác nhau ở mỗi sheet, vd trang_thai) */
 const LABEL_OVERRIDES = {
   lichsu_congcu: { trang_thai: "Trạng thái sửa chữa" },
-  cong_cu: { gia_tri: "Giá trị tài sản (VNĐ)" }
+  cong_cu: { gia_tri: "Giá trị tài sản (VNĐ)", danh_muc_ma: "Danh mục thiết bị" }
 };
 const L = (k, sheet) => (sheet && LABEL_OVERRIDES[sheet] && LABEL_OVERRIDES[sheet][k]) || LABELS[k] || k;
 
@@ -801,15 +801,22 @@ const CONFIG = {
   cong_cu: {
     label:"Công cụ dụng cụ", desc:"Công cụ, thiết bị bàn giao cho nhân sự",
     icon:iconTool(), pk:["cong_cu_ma"],
-    table:["cong_cu_ten","cong_cu_ma","nhanvien_ma","phongban_ten","gia_tri","ngay_nhan"],
+    table:["cong_cu_ten","cong_cu_ma","danh_muc_ma","nhanvien_ma","phongban_ten","gia_tri","ngay_nhan"],
     sections:[
-      {title:"Bàn giao", fields:["cong_cu_ma","cong_cu_ten","nhanvien_ma","khu_vuc","ngay_nhan","tinhtrang_khinhan","gia_tri"]},
+      {title:"Bàn giao", fields:["cong_cu_ma","cong_cu_ten","danh_muc_ma","nhanvien_ma","khu_vuc","ngay_nhan","tinhtrang_khinhan","gia_tri"]},
       {title:"Bản quyền phần mềm", fields:["banquyen_hedieuhanh","banquyen_EOM","banquyen_office"]},
       {title:"Khác", fields:["lich_su","ghi_chu","photo_url"]}
     ],
-    relations:{ nhanvien_ma:{sheet:"nhan_vien", value:"nhanvien_ma", text:"nhanvien_ten", autofill:{nhanvien_ten:"nhanvien_ten", khu_vuc:"khu_vuc"}} },
+    relations:{
+      nhanvien_ma:{sheet:"nhan_vien", value:"nhanvien_ma", text:"nhanvien_ten", autofill:{nhanvien_ten:"nhanvien_ten", khu_vuc:"khu_vuc"}},
+      // Danh mục thiết bị (vd Laptop, Tivi, Máy in...) — dùng để tự lọc đúng bộ thuộc tính
+      // kỹ thuật cần nhập bên dưới (RAM/CPU/màn hình cho laptop, tấm nền/độ phân giải cho
+      // tivi, tốc độ in/loại in cho máy in...) thay vì hiện lẫn lộn thuộc tính của mọi loại.
+      // LƯU Ý: cần có cột "danh_muc_ma" trong sheet cong_cu (thêm cột nếu chưa có).
+      danh_muc_ma:{sheet:"danhmuc_chitiet", value:"danh_muc_ma", text:"danh_muc_ten"}
+    },
     hasDetail:true,
-    filters:["tinhtrang_khinhan","banquyen_hedieuhanh","khu_vuc","phongban_ma"]
+    filters:["danh_muc_ma","tinhtrang_khinhan","banquyen_hedieuhanh","khu_vuc","phongban_ma"]
   },
   lichsu_congcu: {
     label:"Lịch sử công cụ", desc:"Lịch sử bảo trì, sửa chữa công cụ dụng cụ",
@@ -1378,22 +1385,6 @@ function buildNav(){
   const nav = document.getElementById("nav");
   nav.innerHTML = "";
 
-  const recentList = loadRecent().filter(x => CONFIG[x.sheet]);
-  if(recentList.length){
-    const secLabel = document.createElement("div");
-    secLabel.className = "nav-group-label";
-    secLabel.textContent = "TRUY CẬP GẦN ĐÂY";
-    nav.appendChild(secLabel);
-    recentList.forEach(entry=>{
-      const item = document.createElement("div");
-      item.className = "recent-item";
-      item.title = entry.label;
-      item.innerHTML = `${iconClock()}<span>${entry.label}</span>`;
-      item.onclick = ()=> openRecentItem(entry.sheet, entry.id, entry.mode);
-      nav.appendChild(item);
-    });
-  }
-
   NAV_TREE.forEach(sectionDef=>{
     const secLabel = document.createElement("div");
     secLabel.className = "nav-group-label";
@@ -1437,6 +1428,24 @@ function buildNav(){
       }
     });
   });
+
+  // "Truy cập gần đây" đặt CUỐI sidebar (dưới mục Nhật ký), không còn chiếm chỗ
+  // trên cùng đẩy lệch các mục điều hướng chính khi danh sách gần đây dài dần.
+  const recentList = loadRecent().filter(x => CONFIG[x.sheet]);
+  if(recentList.length){
+    const secLabel = document.createElement("div");
+    secLabel.className = "nav-group-label";
+    secLabel.textContent = "TRUY CẬP GẦN ĐÂY";
+    nav.appendChild(secLabel);
+    recentList.forEach(entry=>{
+      const item = document.createElement("div");
+      item.className = "recent-item";
+      item.title = entry.label;
+      item.innerHTML = `${iconClock()}<span>${entry.label}</span>`;
+      item.onclick = ()=> openRecentItem(entry.sheet, entry.id, entry.mode);
+      nav.appendChild(item);
+    });
+  }
 }
 async function refreshCounts(){
   // Chạy song song thay vì tuần tự (for...await) -> tải 1 loạt sheet cùng lúc
@@ -1678,14 +1687,38 @@ function computeCongCuTen(row, specRows){
    hướng sang màn hình khác. ==================================================== */
 let ttRows = [];   // các dòng thông số đang soạn (đang mở form/tab nào thì dùng biến này)
 let ttRowSeq = 0;
+let ttCurrentDanhMuc = null; // Danh mục thiết bị (danh_muc_ma) của công cụ đang xem/sửa — dùng để
+                              // lọc đúng bộ thuộc tính kỹ thuật cần nhập theo từng loại thiết bị.
 
-async function loadTtRowsForCongCu(congCuMa){
+/* Nạp danh sách dòng thông số kỹ thuật cho 1 công cụ, TỰ ĐỘNG liệt kê sẵn đúng các
+   thuộc tính đã khai báo cho Danh mục thiết bị (danhMucMa) — vd chọn danh mục "Laptop"
+   sẽ tự hiện các dòng RAM, CPU, Màn hình...; chọn "Tivi" hiện Tấm nền, Độ phân giải...;
+   chọn "Máy in" hiện Tốc độ in, Loại in (laser/phun)... — ghép kèm giá trị đã lưu (nếu
+   có) theo đúng mã thuộc tính, người dùng chỉ cần điền/sửa giá trị, không phải tự tay
+   "+" từng dòng và nhớ tên thuộc tính. Thông số đã lưu trước đó nhưng không còn khớp
+   danh mục hiện tại (dữ liệu cũ / vừa đổi danh mục) vẫn được giữ lại ở cuối danh sách,
+   không bị mất dữ liệu. */
+async function loadTtRowsForCongCu(congCuMa, danhMucMa){
   ttRows = []; ttRowSeq = 0;
-  if(!congCuMa) return;
+  ttCurrentDanhMuc = danhMucMa || null;
   const [specRows, attrRows] = await Promise.all([apiList("thongso_kythuat"), apiList("thuoc_tinh")]);
   const tenMap = {}; attrRows.forEach(a => { tenMap[a.thuoc_tinh_ma] = a.thuoc_tinh_ten; });
-  specRows.filter(s => s.cong_cu_ma === congCuMa).forEach(s => {
-    ttRows.push({ id: ++ttRowSeq, thuoc_tinh_ma: s.thuoc_tinh_ma, thuoc_tinh_ten: tenMap[s.thuoc_tinh_ma] || s.thuoc_tinh_ma, gia_tri: s.gia_tri || "", _existing: true });
+  const existingByAttr = {};
+  if(congCuMa){
+    specRows.filter(s => s.cong_cu_ma === congCuMa).forEach(s => { existingByAttr[s.thuoc_tinh_ma] = s.gia_tri || ""; });
+  }
+  if(ttCurrentDanhMuc){
+    const norm = normalizeCodeKey(ttCurrentDanhMuc);
+    attrRows.filter(a => normalizeCodeKey(a.danh_muc_ma) === norm).forEach(a => {
+      const has = Object.prototype.hasOwnProperty.call(existingByAttr, a.thuoc_tinh_ma);
+      ttRows.push({ id: ++ttRowSeq, thuoc_tinh_ma: a.thuoc_tinh_ma, thuoc_tinh_ten: a.thuoc_tinh_ten,
+        gia_tri: has ? existingByAttr[a.thuoc_tinh_ma] : "", _existing: has });
+      delete existingByAttr[a.thuoc_tinh_ma];
+    });
+  }
+  // các thông số đã lưu trước đó nhưng không khớp Danh mục hiện tại -> vẫn hiện, không mất dữ liệu
+  Object.entries(existingByAttr).forEach(([ma, val]) => {
+    ttRows.push({ id: ++ttRowSeq, thuoc_tinh_ma: ma, thuoc_tinh_ten: tenMap[ma] || ma, gia_tri: val, _existing: true });
   });
 }
 function getTtRow(id){ return ttRows.find(r=>r.id===id); }
@@ -1721,16 +1754,19 @@ function wireTtRow(id, locked){
 function renderTtTable(containerId, locked){
   const wrap = document.getElementById(containerId);
   if(!wrap) return;
+  const catHint = !ttCurrentDanhMuc
+    ? '<p class="field-hint" style="margin:0 0 10px;">💡 Chọn "Danh mục thiết bị" ở trên để tự động liệt kê đúng các thuộc tính kỹ thuật cần nhập (vd Laptop → RAM/CPU/Màn hình, Tivi → Tấm nền/Độ phân giải, Máy in → Tốc độ in/Loại in...).</p>'
+    : (ttRows.length ? "" : '<p class="field-hint" style="margin:0 0 10px;">Danh mục này chưa khai báo thuộc tính kỹ thuật nào — vào mục "Thuộc tính kỹ thuật" ở menu để khai báo thêm.</p>');
   wrap.innerHTML = `
+    ${catHint}
     <div class="bb-asset-head" style="margin:0 0 10px;">
       <h3 style="font-size:13px;">Thông số kỹ thuật</h3>
-      ${locked ? "" : `<button type="button" class="bb-add-row" id="${containerId}AddBtn" title="Thêm dòng">
+      ${locked ? "" : `<button type="button" class="bb-add-row" id="${containerId}AddBtn" title="Thêm dòng khác (ngoài danh mục)">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M12 5v14M5 12h14"/></svg>
       </button>`}
     </div>
     <table class="bb-asset-table"><thead><tr><th>STT</th><th>Thuộc tính</th><th>Giá trị</th><th></th></tr></thead>
     <tbody id="${containerId}Tbody"></tbody></table>
-    ${ttRows.length ? "" : '<p class="field-hint" style="margin:2px 0 0;">Chưa có thông số kỹ thuật nào.</p>'}
   `;
   const tbody = document.getElementById(containerId+"Tbody");
   ttRows.forEach(row=>{
@@ -1747,7 +1783,9 @@ function renderTtTable(containerId, locked){
   }
 }
 async function pickThuocTinhForRow(rowId){
-  await openRelPicker({ sheet:"thuoc_tinh", value:"thuoc_tinh_ma", text:"thuoc_tinh_ten" }, "Thuộc tính kỹ thuật", (rec)=>{
+  const norm = ttCurrentDanhMuc ? normalizeCodeKey(ttCurrentDanhMuc) : null;
+  const filterFn = norm ? (r => normalizeCodeKey(r.danh_muc_ma) === norm) : null;
+  await openRelPicker({ sheet:"thuoc_tinh", value:"thuoc_tinh_ma", text:"thuoc_tinh_ten", filter: filterFn }, "Thuộc tính kỹ thuật", (rec)=>{
     if(!rec) return;
     const row = getTtRow(rowId);
     if(!row) return;
@@ -1791,7 +1829,7 @@ function syncTtRowsForCongCu(congCuMa){
 }
 async function renderSpSpecs(){
   const cc = spState.record;
-  await loadTtRowsForCongCu(cc.cong_cu_ma);
+  await loadTtRowsForCongCu(cc.cong_cu_ma, cc.danh_muc_ma);
   const body = document.getElementById("spBody");
   body.innerHTML = `<div id="ttContainerSp"></div>
     <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:14px;">
@@ -1937,11 +1975,13 @@ async function renderTable(){
   }
 
   // option cho bộ lọc phòng ban của công cụ dụng cụ / quà tặng-đồng phục: join qua nhân
-  // viên (vì các sheet này chỉ lưu nhanvien_ma, không lưu trực tiếp phongban_ma)
+  // viên (vì các sheet này chỉ lưu nhanvien_ma, không lưu trực tiếp phongban_ma).
+  // Gọi song song (Promise.all) thay vì await nối tiếp từng sheet -> giảm độ trễ khi cache
+  // còn nguội (lần tải đầu), vì 2 sheet này độc lập với nhau, không cần chờ lần lượt.
   let extraOptions = {};
-  if((currentSheet === "cong_cu" || currentSheet === "qua_tang") && cfg.filters.includes("phongban_ma")){
-    const nvRows = await apiList("nhan_vien");
-    const pbRows = await apiList("phong_ban");
+  const needsNvPbFilter = (currentSheet === "cong_cu" || currentSheet === "qua_tang") && cfg.filters.includes("phongban_ma");
+  if(needsNvPbFilter){
+    const [nvRows, pbRows] = await Promise.all([apiList("nhan_vien"), apiList("phong_ban")]);
     const pbName = {}; pbRows.forEach(p => pbName[p.phongban_ma] = p.phongban_ten);
     const nvByMa = {}; nvRows.forEach(nv => nvByMa[nv.nhanvien_ma] = nv);
     const allRows = dataCache[currentSheet] || [];
@@ -2169,7 +2209,7 @@ async function renderTable(){
   `;
 }
 function gotoPage(p){ page = p; renderTable(); }
-function escAttr(s){ return String(s).replace(/'/g,"&#39;"); }
+function escAttr(s){ return String(s).replace(/&/g,"&amp;").replace(/'/g,"&#39;").replace(/"/g,"&quot;"); }
 
 /* ---------- thanh thao tác hàng loạt (bulk): hiện khi có bản ghi đang được tick chọn ---------- */
 function renderBulkBar(){
@@ -2465,8 +2505,7 @@ async function handleImportFile(e){
 
 document.getElementById("searchInput").addEventListener("input", debounce(async ()=>{
   page = 1;
-  const rows = await apiList(currentSheet);
-  applyFilter(rows);
+  applyFilter(dataCache[currentSheet] || await apiList(currentSheet));
 }, 300));
 
 /* ---------- distinct values (gợi ý datalist) ---------- */
@@ -2719,7 +2758,7 @@ async function openForm(id){
   // thongso_kythuat) để xem/thêm/sửa/xoá ngay trong lúc thêm mới hoặc sửa công cụ.
   if(currentSheet === "cong_cu"){
     body.innerHTML += `<fieldset class="section"><legend>Thông số kỹ thuật</legend><div id="ttContainerForm"></div></fieldset>`;
-    await loadTtRowsForCongCu(record && record.cong_cu_ma);
+    await loadTtRowsForCongCu(record && record.cong_cu_ma, record && record.danh_muc_ma);
     renderTtTable("ttContainerForm", false);
   }
 
@@ -3614,6 +3653,16 @@ async function openRelFieldPicker(sheet, field, displayEl){
         if(targetEl) targetEl.value = rec[srcField] ?? "";
       });
     }
+    // Công cụ: vừa đổi Danh mục thiết bị -> nạp lại NGAY đúng bộ thuộc tính kỹ thuật
+    // của danh mục mới (vd đổi từ Laptop sang Tivi -> đổi từ RAM/CPU sang Tấm nền/Độ phân giải)
+    if(sheet === "cong_cu" && field === "danh_muc_ma"){
+      const isSp = scopeRoot.id === "spBody";
+      const ccMaEl = scopeRoot.querySelector('[data-field="cong_cu_ma"], [data-spfield="cong_cu_ma"]');
+      const congCuMa = ccMaEl ? ccMaEl.value : (spState.record ? spState.record.cong_cu_ma : null);
+      loadTtRowsForCongCu(congCuMa, value).then(()=>{
+        renderTtTable(isSp ? "ttContainerSp" : "ttContainerForm", false);
+      });
+    }
   });
 }
 
@@ -3849,15 +3898,17 @@ async function renderSpInfo(){
 
   let extraCardHtml = "";
   if(spState.sheet === "cong_cu"){
-    const [specRows, nvRows, pbRows] = await Promise.all([
-      apiList("thongso_kythuat"), apiList("nhan_vien"), apiList("phong_ban")
+    const [specRows, nvRows, pbRows, dmRows] = await Promise.all([
+      apiList("thongso_kythuat"), apiList("nhan_vien"), apiList("phong_ban"), apiList("danhmuc_chitiet")
     ]);
     const tenCongCu = computeCongCuTen(record, specRows);
     const nv = nvRows.find(n => n.nhanvien_ma === record.nhanvien_ma);
     const pb = nv ? pbRows.find(p => p.phongban_ma === nv.phongban_ma) : null;
+    const dm = dmRows.find(d => normalizeCodeKey(d.danh_muc_ma) === normalizeCodeKey(record.danh_muc_ma));
     extraCardHtml = `
       <div class="info-card" style="margin-bottom:18px;">
         <div><span class="k">Tên công cụ (tổng hợp)</span><span class="v">${tenCongCu || "—"}</span></div>
+        <div><span class="k">Danh mục thiết bị</span><span class="v">${dm ? dm.danh_muc_ten : (record.danh_muc_ma || "—")}</span></div>
         <div><span class="k">Phòng ban</span><span class="v">${pb ? pb.phongban_ten : "—"}</span></div>
         <div><span class="k">Người đang giữ</span><span class="v">${nv ? nv.nhanvien_ten : "—"}${record.nhanvien_ma ? " ("+record.nhanvien_ma+")" : ""}</span></div>
         <div><span class="k">Khu vực</span><span class="v">${record.khu_vuc || "—"}</span></div>
@@ -4058,11 +4109,12 @@ async function openDetail(id){
   document.getElementById("detailTitle").textContent = `Chi tiết công cụ · ${cc.cong_cu_ma}`;
   pushRecent("cong_cu", id, cc.cong_cu_ten || cc.cong_cu_ma, "detail");
 
-  const [nvRows, specRows, tenAttrRows, hisRows, pbRows] = await Promise.all([
-    apiList("nhan_vien"), apiList("thongso_kythuat"), apiList("thuoc_tinh"), apiList("lichsu_congcu"), apiList("phong_ban")
+  const [nvRows, specRows, tenAttrRows, hisRows, pbRows, dmRows] = await Promise.all([
+    apiList("nhan_vien"), apiList("thongso_kythuat"), apiList("thuoc_tinh"), apiList("lichsu_congcu"), apiList("phong_ban"), apiList("danhmuc_chitiet")
   ]);
   const nv = nvRows.find(r=>r.nhanvien_ma===cc.nhanvien_ma);
   const pb = nv ? pbRows.find(p=>p.phongban_ma===nv.phongban_ma) : null;
+  const dm = dmRows.find(d=>normalizeCodeKey(d.danh_muc_ma)===normalizeCodeKey(cc.danh_muc_ma));
   const attrName = {}; tenAttrRows.forEach(a=>attrName[a.thuoc_tinh_ma]=a.thuoc_tinh_ten);
   const specs = specRows.filter(s=>s.cong_cu_ma===cc.cong_cu_ma);
   const history = hisRows.filter(h=>h.cong_cu_ma===cc.cong_cu_ma);
@@ -4071,6 +4123,7 @@ async function openDetail(id){
   body.innerHTML = `
     ${cc.photo_url ? `<div class="img-preview" style="max-width:220px;margin-bottom:14px;"><img src="${driveDirectLink(cc.photo_url)}" onerror="this.parentElement.style.display='none'"></div>` : ""}
     <div class="info-card">
+      <div><span class="k">Danh mục thiết bị</span><span class="v">${dm?dm.danh_muc_ten:(cc.danh_muc_ma||"—")}</span></div>
       <div><span class="k">Nhân sự đang dùng</span><span class="v">${nv?nv.nhanvien_ten:"—"} (${cc.nhanvien_ma||"—"})</span></div>
       <div><span class="k">Phòng ban</span><span class="v">${pb?pb.phongban_ten:"—"}</span></div>
       <div><span class="k">Khu vực</span><span class="v">${cc.khu_vuc||"—"}</span></div>
