@@ -500,6 +500,7 @@
           <span id="filterChipLabel"></span>
           <button id="filterChipClear" title="Bỏ lọc">×</button>
         </div>
+        <button class="btn btn-ghost btn-sm" id="pbBackBtn" style="display:none;" title="Quay lại thông tin phòng ban">‹ Quay lại phòng ban</button>
         <div class="search-box">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
           <input id="searchInput" type="text" placeholder="Tìm kiếm...">
@@ -867,6 +868,7 @@ let quickFilters = {};     // { fieldName: selectedValue } - bộ lọc nhanh th
 let sortState = {};        // { sheetName: { field, dir:"asc"|"desc" } } - sắp xếp theo cột trên mỗi danh sách
 let hoaDonExportRows = []; // dữ liệu Hoá đơn (đầy đủ cột) đang hiển thị, dùng khi bấm "Xuất Excel"
 let overviewExportData = null; // dữ liệu Tổng quan (đầy đủ, không giới hạn top 6) dùng khi bấm "Xuất Excel"
+let pbReturnState = null;  // {id: phongban_ma} khi đang xem danh sách Nhân sự đi từ chi tiết Phòng ban -> cho phép bấm "Quay lại phòng ban"
 
 /* ---------- gọi API bằng fetch() ----------
    TRƯỚC ĐÂY: dùng JSONP (thẻ <script src="...">) để né lỗi CORS khi mở file
@@ -1225,6 +1227,7 @@ function closeAllOverlays(){
 let overviewTimer = null;
 async function switchSheet(key, filter){
   closeAllOverlays();
+  pbReturnState = null; // rời khỏi ngữ cảnh "Nhân sự theo phòng ban" -> ẩn nút quay lại
   if(overviewTimer){ clearInterval(overviewTimer); overviewTimer = null; }
   const oldHdSearchRow = document.getElementById("hoaDonSearchRow");
   if(oldHdSearchRow) oldHdSearchRow.remove();
@@ -1265,13 +1268,31 @@ function renderFilterChip(){
   const chip = document.getElementById("filterChip");
   chip.classList.toggle("show", !!activeFilter);
   document.getElementById("filterChipLabel").textContent = activeFilter ? activeFilter.label : "";
+  document.getElementById("pbBackBtn").style.display = (pbReturnState && currentSheet === "nhan_vien") ? "inline-flex" : "none";
 }
 document.getElementById("filterChipClear").onclick = ()=>{
   activeFilter = null;
+  pbReturnState = null;
   renderFilterChip();
   page = 1;
   loadTable();
 };
+document.getElementById("pbBackBtn").onclick = ()=> backToPhongBan();
+
+/* Mở danh sách Nhân sự lọc theo 1 phòng ban cụ thể (bấm từ panel chi tiết Phòng
+   ban), đồng thời ghi nhớ để hiện nút "‹ Quay lại phòng ban" — bấm vào sẽ mở
+   lại đúng panel chi tiết phòng ban vừa xem trước đó. */
+async function openPhongBanNhanSu(pbMa, pbTen){
+  await switchSheet("nhan_vien", { label:`Phòng ban: ${pbTen}`, predicate: r => String(r.phongban_ma) === String(pbMa) });
+  pbReturnState = { id: pbMa };
+  renderFilterChip();
+}
+async function backToPhongBan(){
+  const id = pbReturnState ? pbReturnState.id : null;
+  pbReturnState = null;
+  await switchSheet("phong_ban");
+  if(id) openRecordPanel("phong_ban", id);
+}
 
 /* ---------- bảng dữ liệu ---------- */
 async function loadTable(){
@@ -3063,6 +3084,15 @@ async function renderSpInfo(){
         <div><span class="k">Phòng ban</span><span class="v">${pb ? pb.phongban_ten : "—"}</span></div>
         <div><span class="k">Người đang giữ</span><span class="v">${nv ? nv.nhanvien_ten : "—"}${record.nhanvien_ma ? " ("+record.nhanvien_ma+")" : ""}</span></div>
         <div><span class="k">Khu vực</span><span class="v">${record.khu_vuc || "—"}</span></div>
+      </div>`;
+  }
+  if(spState.sheet === "phong_ban"){
+    const nvRows = await apiList("nhan_vien");
+    const soLuong = nvRows.filter(n => String(n.phongban_ma) === String(record.phongban_ma)).length;
+    extraCardHtml = `
+      <div class="ov-row" style="cursor:pointer;border:1px solid var(--line);border-radius:9px;padding:12px 14px;margin-bottom:18px;background:var(--white);"
+        onclick="openPhongBanNhanSu('${escAttr(record.phongban_ma)}','${escAttr(record.phongban_ten||record.phongban_ma)}')">
+        <div class="ov-row-top" style="margin:0;"><span>Xem danh sách nhân sự thuộc phòng ban này<span class="ov-arrow">→</span></span><span>${soLuong}</span></div>
       </div>`;
   }
 
