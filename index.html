@@ -695,6 +695,7 @@ const LABELS = {
   danh_muc_cha:"Thuộc danh mục cha", danh_muc_cha_ten:"Tên danh mục cha",
   danh_muc_ma_ten:"Tên danh mục",
   ma_qua_tang:"Quà tặng/Đồng phục", ngay_phat:"Ngày phát quà",
+  so_luot:"Số lượt đã nhận", lan_phat_gan_nhat:"Lần phát gần nhất",
   hoadon_url:"Hoá đơn (ảnh/URL)"
 };
 /* nhãn riêng theo từng sheet, ưu tiên hơn nhãn dùng chung ở trên (tránh nhầm lẫn
@@ -807,9 +808,10 @@ const CONFIG = {
     filters:["danh_muc_ma"]
   },
   qua_tang: {
-    label:"Quà tặng/Đồng phục", desc:"Quà tặng, đồng phục đã phát cho nhân sự",
+    label:"Quà tặng/Đồng phục", desc:"Quà tặng, đồng phục đã phát cho nhân sự (mỗi nhân sự 1 dòng, bấm vào xem chi tiết)",
     icon:iconGift(), pk:["nhanvien_ma","ma_qua_tang"],
-    table:["nhanvien_ma","phongban_ten","ma_qua_tang","ngay_phat"],
+    table:["nhanvien_ma","phongban_ten","so_luot","lan_phat_gan_nhat"],
+    groupField:"nhanvien_ma",
     sections:[{title:"Thông tin phát quà/đồng phục", fields:["nhanvien_ma","ma_qua_tang","ngay_phat"]}],
     relations:{
       nhanvien_ma:{sheet:"nhan_vien", value:"nhanvien_ma", text:"nhanvien_ten", autofill:{nhanvien_ten:"nhanvien_ten"}},
@@ -1640,13 +1642,53 @@ async function autofillDisplayValue(sheet, field, record){
   return found ? (found[info.srcKey] ?? fallback) : fallback;
 }
 
+/* Gộp các dòng quà tặng/đồng phục theo nhân sự: mỗi nhân sự chỉ hiện 1 dòng đại
+   diện (kèm tổng số lượt đã nhận + lần phát gần nhất), bấm vào dòng sẽ xem đầy
+   đủ danh sách quà/đồng phục + ngày phát trong panel chi tiết (openQuaTangDetail). */
+function groupQuaTangRows(rows){
+  const map = new Map();
+  rows.forEach(r=>{
+    if(!map.has(r.nhanvien_ma)) map.set(r.nhanvien_ma, []);
+    map.get(r.nhanvien_ma).push(r);
+  });
+  return [...map.entries()].map(([nhanvienMa, items])=>{
+    const sorted = items.slice().sort((a,b)=> (vnToIso(b.ngay_phat)||"").localeCompare(vnToIso(a.ngay_phat)||""));
+    const rep = { ...sorted[0] };
+    rep.so_luot = items.length;
+    rep.lan_phat_gan_nhat = sorted[0].ngay_phat || "";
+    return rep;
+  });
+}
+
 async function renderTable(){
   const cfg = CONFIG[currentSheet];
   const wrap = document.getElementById("tableWrap");
-  const total = filtered.length;
+  const isGrouped = !!cfg.groupField;
+  let displayRows = filtered;
+  if(isGrouped){
+    displayRows = groupQuaTangRows(filtered);
+    const s = sortState[currentSheet];
+    if(s && s.field){
+      const mul = s.dir === "desc" ? -1 : 1;
+      displayRows = displayRows.slice().sort((a,b)=>{
+        let va = a[s.field], vb = b[s.field];
+        if(DATE_FIELDS_HINT(s.field) || s.field === "lan_phat_gan_nhat"){ va = vnToIso(va) || ""; vb = vnToIso(vb) || ""; }
+        else if(NUMBER_FIELDS.has(s.field) || s.field === "so_luot"){
+          const na = Number(va), nb = Number(vb);
+          if(!isNaN(na) && !isNaN(nb)){ va = na; vb = nb; }
+        }
+        if(va == null || va === "") return 1;
+        if(vb == null || vb === "") return -1;
+        if(va < vb) return -1 * mul;
+        if(va > vb) return 1 * mul;
+        return 0;
+      });
+    }
+  }
+  const total = displayRows.length;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   page = Math.min(page, totalPages);
-  const pageRows = filtered.slice((page-1)*PAGE_SIZE, page*PAGE_SIZE);
+  const pageRows = displayRows.slice((page-1)*PAGE_SIZE, page*PAGE_SIZE);
 
   // chuẩn bị bản đồ quan hệ (nếu có) để hiển thị tên thay vì mã
   const relMaps = {};
@@ -1763,6 +1805,20 @@ async function renderTable(){
       return `<td>${val}</td>`;
     }).join("");
     const id = idOf(row, cfg.pk);
+
+    if(isGrouped){
+      // sheet quà tặng/đồng phục: mỗi dòng đại diện 1 nhân sự -> bấm dòng/icon mắt
+      // mở panel liệt kê đầy đủ các lượt quà đã nhận, không sửa/xoá trực tiếp tại đây
+      return `<tr class="clickable-row" onclick="openQuaTangDetail('${escAttr(row.nhanvien_ma)}')">
+        ${cells}
+        <td class="col-actions">
+          <button class="icon-btn" title="Xem chi tiết" onclick="event.stopPropagation();openQuaTangDetail('${escAttr(row.nhanvien_ma)}')">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="2.6"/></svg>
+          </button>
+        </td>
+      </tr>`;
+    }
+
     const detailBtn = cfg.hasDetail ? `<button class="icon-btn" title="Xem chi tiết" onclick="openDetail('${escAttr(id)}')">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="2.6"/></svg>
       </button>` : "";
@@ -3004,6 +3060,79 @@ async function openRecordPanelHistory(congCuMa){
 }
 
 /* ---------- panel chi tiết (xem / sửa 1 bản ghi + lịch sử sửa chữa công cụ) ---------- */
+/* ---------- chi tiết quà tặng/đồng phục theo nhân sự (dòng đại diện đã gộp) ---------- */
+async function openQuaTangDetail(nhanvienMa){
+  const [qtRows, nvRows, pbRows, dmRows] = await Promise.all([
+    apiList("qua_tang"), apiList("nhan_vien"), apiList("phong_ban"), apiList("danh_muc")
+  ]);
+  const nv = nvRows.find(n=>n.nhanvien_ma===nhanvienMa);
+  const pb = nv ? pbRows.find(p=>p.phongban_ma===nv.phongban_ma) : null;
+  const dmName = {}; dmRows.forEach(d=>{ dmName[d.danh_muc_ma]=d.danh_muc_ten; });
+  const items = qtRows.filter(q=>q.nhanvien_ma===nhanvienMa)
+    .sort((a,b)=> (vnToIso(b.ngay_phat)||"").localeCompare(vnToIso(a.ngay_phat)||""));
+
+  document.getElementById("spEyebrow").textContent = "CHI TIẾT QUÀ TẶNG/ĐỒNG PHỤC";
+  document.getElementById("spTitle").textContent = nv ? `${nv.nhanvien_ten} (${nhanvienMa})` : nhanvienMa;
+  document.getElementById("spTabs").innerHTML = "";
+  document.getElementById("spPhoto46").style.display = "none";
+  document.getElementById("spHead").classList.remove("has-photo");
+
+  document.getElementById("spBody").innerHTML = `
+    <div class="info-card" style="margin-bottom:16px;">
+      <div><span class="k">Phòng ban</span><span class="v">${pb?pb.phongban_ten:"—"}</span></div>
+      <div><span class="k">Tổng số lượt đã nhận</span><span class="v">${items.length}</span></div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;margin-bottom:10px;">
+      <button class="btn btn-primary btn-sm" onclick="openQuaTangAddForm('${escAttr(nhanvienMa)}')">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12h14"/></svg>
+        Thêm quà tặng
+      </button>
+    </div>
+    ${items.length ? items.map(q=>`
+      <div class="sp-history-item">
+        <div class="sp-history-top">
+          <b>${dmName[q.ma_qua_tang] || q.ma_qua_tang}</b>
+          <span style="display:flex;align-items:center;gap:6px;">
+            <span class="muted" style="font-size:12.5px;">${q.ngay_phat||"—"}</span>
+            <button class="icon-btn danger" title="Xoá" onclick="event.stopPropagation();deleteQuaTangItem('${escAttr(nhanvienMa)}','${escAttr(q.ma_qua_tang)}')">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>
+            </button>
+          </span>
+        </div>
+      </div>`).join("") : '<p class="muted">Chưa có quà tặng/đồng phục nào.</p>'}
+  `;
+  document.getElementById("spFoot").style.display = "none";
+  pushOverlay("sidePanelOverlay");
+  document.getElementById("sidePanelOverlay").classList.add("show");
+}
+
+function deleteQuaTangItem(nhanvienMa, maQuaTang){
+  if(!window.confirm("Xoá lượt quà tặng/đồng phục này?")) return;
+  const pk = ["nhanvien_ma","ma_qua_tang"];
+  const id = `${nhanvienMa}|${maQuaTang}`;
+  queueOperation("delete", "qua_tang", id, null, ()=>{
+    if(dataCache.qua_tang) dataCache.qua_tang = dataCache.qua_tang.filter(r=>idOf(r,pk)!==id);
+  });
+  toast("Đã xoá (đang đồng bộ ngầm…)");
+  refreshCounts();
+  if(currentSheet==="qua_tang") loadTable();
+  openQuaTangDetail(nhanvienMa);
+}
+
+/* Mở form "Thêm mới" chuẩn của sheet qua_tang, tự điền sẵn nhân sự đang xem chi
+   tiết (nhanvien_ma) để người dùng chỉ cần chọn loại quà + ngày phát. */
+async function openQuaTangAddForm(nhanvienMa){
+  await closeSidePanelSmooth();
+  currentSheet = "qua_tang";
+  await openForm(null);
+  const nvRows = await apiList("nhan_vien");
+  const nv = nvRows.find(n=>n.nhanvien_ma===nhanvienMa);
+  const hiddenEl = document.querySelector('#formBody [data-field="nhanvien_ma"]');
+  const displayEl = document.querySelector('#formBody [data-rel-display="nhanvien_ma"]');
+  if(hiddenEl) hiddenEl.value = nhanvienMa;
+  if(displayEl) displayEl.value = nv ? `${nv.nhanvien_ten} (${nhanvienMa})` : nhanvienMa;
+}
+
 let spState = { sheet:null, id:null, record:null };
 
 function handleRowClick(e, id){
