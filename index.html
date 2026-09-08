@@ -420,9 +420,11 @@
   @keyframes spin{to{transform:rotate(360deg);}}
   .spin{animation:spin .8s linear infinite;}
   @media print{
-    .sidebar,.topbar,.bb-actions,#toast-wrap{display:none !important;}
+    .sidebar,.topbar,.bb-actions,#toast-wrap,.bb-tip{display:none !important;}
     .content{padding:0;}
     .bb-doc{box-shadow:none;border:none;}
+    .bb-asset-table{margin-bottom:4px;}
+    .bb-note{margin-top:14px;}
   }
 
   /* ---------- widget tải ảnh lên (browse máy tính / chụp camera) ---------- */
