@@ -219,17 +219,22 @@
 
   /* ---------- form "Thêm/Sửa" & xem hoá đơn: mở full phần màn hình còn lại
      (trừ sidebar bên trái), thay vì hộp thoại nhỏ giữa màn hình ---------- */
-  #formOverlay,#invoiceOverlay{padding:0;align-items:stretch;justify-content:flex-start;}
-  #formOverlay .modal,#invoiceOverlay .modal{
+  #formOverlay{padding:0;align-items:stretch;justify-content:flex-start;}
+  #formOverlay .modal{
     max-width:none;width:100%;height:100vh;border-radius:0;
     display:flex;flex-direction:column;box-shadow:-14px 0 40px rgba(20,30,20,.18);
     animation:slideinFull .16s ease;
   }
   #formOverlay .modal-body{flex:1;min-height:0;max-height:none;}
-  #invoiceOverlay .modal-body{flex:1;min-height:0;max-height:none;display:flex;align-items:center;justify-content:center;}
   @keyframes slideinFull{from{opacity:0;transform:translateX(18px);}to{opacity:1;transform:none;}}
   @media (max-width:880px){
-    #formOverlay .modal,#invoiceOverlay .modal{max-width:100vw;}
+    #formOverlay .modal{max-width:100vw;}
+  }
+  /* xem hoá đơn: hộp thoại vừa khít nội dung, căn giữa màn hình (không full-screen) */
+  #invoiceOverlay .modal{max-width:720px;width:100%;}
+  #invoiceOverlay .modal-body{max-height:78vh;overflow:auto;display:flex;align-items:center;justify-content:center;}
+  @media (max-width:880px){
+    #invoiceOverlay .modal{max-width:96vw;}
   }
   .modal-head{
     padding:20px 24px;border-bottom:1px solid #ECEBDD;
@@ -1208,8 +1213,18 @@ async function refreshCounts(){
   }
 }
 
+/* Đóng hết mọi overlay đang mở (form thêm/sửa, panel chi tiết, xem hoá đơn,
+   picker...) khi người dùng bấm sang mục menu khác. Trước đây các overlay này
+   không tự đóng khi chuyển trang -> ở lại "nổi" đè lên nội dung mục mới. */
+function closeAllOverlays(){
+  ["formOverlay","detailOverlay","confirmOverlay","sidePanelOverlay","invoiceOverlay","assetPickOverlay","relPickOverlay"]
+    .forEach(id=>{ const el = document.getElementById(id); if(el) el.classList.remove("show"); });
+  overlayStack = [];
+}
+
 let overviewTimer = null;
 async function switchSheet(key, filter){
+  closeAllOverlays();
   if(overviewTimer){ clearInterval(overviewTimer); overviewTimer = null; }
   const oldHdSearchRow = document.getElementById("hoaDonSearchRow");
   if(oldHdSearchRow) oldHdSearchRow.remove();
@@ -1634,10 +1649,12 @@ async function renderTable(){
   }
 
   // trường ảo "phongban_ten" cho công cụ dụng cụ / quà tặng-đồng phục: join qua nhân
-  // viên -> phòng ban (2 sheet này chỉ lưu nhanvien_ma, không lưu trực tiếp phongban_ma)
+  // viên -> phòng ban (2 sheet này chỉ lưu nhanvien_ma, không lưu trực tiếp phongban_ma).
+  // CHỈ áp dụng cho 2 sheet này — sheet phong_ban đã có sẵn cột phongban_ten thật, không
+  // được ghi đè bằng cách tra theo nhanvien_ma (cột không tồn tại ở sheet phong_ban).
   let ccPhongBanByNV = null;
   let ccTenMap = null;
-  if(cfg.table.includes("phongban_ten")){
+  if((currentSheet === "cong_cu" || currentSheet === "qua_tang") && cfg.table.includes("phongban_ten")){
     const nvRows = await apiList("nhan_vien");
     const pbMap = await relationMap({ sheet:"phong_ban", value:"phongban_ma", text:"phongban_ten" });
     ccPhongBanByNV = {};
@@ -2802,7 +2819,6 @@ function openInvoiceImage(url){
     </div>`;
     pushOverlay("invoiceOverlay");
     document.getElementById("invoiceOverlay").classList.add("show");
-    positionFullOverlay("invoiceOverlay");
     return;
   }
   const direct = driveDirectLink(url);
@@ -2811,7 +2827,7 @@ function openInvoiceImage(url){
   const img = document.createElement("img");
   img.src = direct;
   img.alt = "Hoá đơn";
-  img.style.cssText = "max-width:100%;max-height:100%;width:auto;height:auto;display:block;margin:0 auto;border-radius:8px;object-fit:contain;";
+  img.style.cssText = "max-width:100%;max-height:76vh;width:auto;height:auto;display:block;margin:0 auto;border-radius:8px;object-fit:contain;";
   img.onerror = function(){
     img.remove();
     const fallback = document.createElement("div");
@@ -2823,7 +2839,6 @@ function openInvoiceImage(url){
   body.appendChild(link);
   pushOverlay("invoiceOverlay");
   document.getElementById("invoiceOverlay").classList.add("show");
-  positionFullOverlay("invoiceOverlay");
 }
 
 /* ---------- picker khoá ngoại: nháy đúp để chọn từ danh sách ---------- */
@@ -3312,7 +3327,7 @@ function positionFullOverlay(overlayId){
   overlay.style.width = Math.round(rect.width) + "px";
 }
 function repositionOpenFullOverlays(){
-  ["formOverlay","invoiceOverlay"].forEach(id=>{
+  ["formOverlay"].forEach(id=>{
     const el = document.getElementById(id);
     if(el && el.classList.contains("show")) positionFullOverlay(id);
   });
