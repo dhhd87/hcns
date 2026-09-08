@@ -326,11 +326,20 @@
   .ov-bar-fill{height:100%;background:var(--sage);border-radius:4px;}
 
   /* ---------- side detail panel (xem/sửa 1 bản ghi) ---------- */
-  .side-panel-overlay{position:fixed;inset:0;background:rgba(29,46,34,.35);display:none;justify-content:flex-end;z-index:55;}
-  .side-panel-overlay.show{display:flex;}
+  .side-panel-overlay{position:fixed;inset:0;background:rgba(29,46,34,.35);display:none;justify-content:flex-end;z-index:55;
+    opacity:0;transition:opacity .18s ease;}
+  .side-panel-overlay.show{display:flex;opacity:1;}
+  .side-panel-overlay.closing{opacity:0;}
   .side-panel{width:660px;max-width:96vw;height:100vh;background:var(--white);
-    box-shadow:-14px 0 40px rgba(20,30,20,.18);display:flex;flex-direction:column;animation:slidein .18s ease;}
+    box-shadow:-14px 0 40px rgba(20,30,20,.18);display:flex;flex-direction:column;animation:slidein .2s cubic-bezier(.4,0,.2,1);
+    transition:transform .18s cubic-bezier(.4,0,.2,1), opacity .18s ease;}
+  .side-panel-overlay.closing .side-panel{transform:translateX(28px);opacity:0;}
   @keyframes slidein{from{transform:translateX(24px);opacity:.6;}to{transform:none;opacity:1;}}
+  /* hiệu ứng chuyển nhẹ khi nội dung bảng/danh sách được thay mới (đổi mục menu,
+     chuyển sang danh sách nhân sự theo phòng ban, quay lại...) cho cảm giác mượt hơn
+     thay vì đổi nội dung đột ngột */
+  .fade-swap{animation:fadeSwap .22s ease;}
+  @keyframes fadeSwap{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:none;}}
   .side-panel-head{padding:20px 22px 14px;border-bottom:1px solid #ECEBDD;display:flex;align-items:flex-start;justify-content:space-between;gap:10px;}
   .side-panel-eyebrow{font-size:11px;letter-spacing:.6px;color:#8B9583;font-weight:700;margin-bottom:3px;}
   .side-panel-head h2{margin:0;font-size:18px;color:var(--forest-deep);font-family:'Be Vietnam Pro',sans-serif;font-weight:600;}
@@ -672,7 +681,7 @@ const LABELS = {
   bang_cap:"Bằng cấp", trangthai_bangcap:"Trạng thái bằng cấp", trangthai_hoso:"Trạng thái hồ sơ",
   trang_thai:"Loại hình lao động", tinh_trang:"Tình trạng làm việc", ngay_nghi_viec:"Ngày nghỉ việc",
   photo_url:"Ảnh đại diện (URL)",
-  phongban_ten:"Tên phòng ban", vung_mien:"Vùng miền",
+  phongban_ten:"Tên phòng ban", vung_mien:"Vùng miền", so_luong_nhan_su:"Số lượng nhân sự",
   cong_cu_ma:"Mã công cụ", cong_cu_ten:"Tên công cụ", banquyen_hedieuhanh:"BQ hệ điều hành", banquyen_EOM:"BQ EOM (Office)",
   banquyen_office:"Bản quyền Office", ngay_nhan:"Ngày nhận", tinhtrang_khinhan:"Tình trạng khi nhận",
   lich_su:"Đã có lịch sử sửa?", ghi_chu:"Ghi chú",
@@ -734,7 +743,7 @@ const CONFIG = {
   phong_ban: {
     label:"Phòng ban", desc:"Danh mục đơn vị / cửa hàng / phòng ban",
     icon:iconBuilding(), pk:["phongban_ma"],
-    table:["phongban_ma","phongban_ten","vung_mien","khu_vuc"],
+    table:["phongban_ma","phongban_ten","vung_mien","khu_vuc","so_luong_nhan_su"],
     sections:[{title:"Thông tin phòng ban", fields:["phongban_ma","phongban_ten","vung_mien","khu_vuc"]}],
     relations:{},
     filters:["vung_mien","khu_vuc"]
@@ -1145,6 +1154,33 @@ function toast(msg, isError, retryFn){
 let overlayStack = [];
 function pushOverlay(id){ overlayStack = overlayStack.filter(x=>x!==id); overlayStack.push(id); }
 function popOverlay(id){ overlayStack = overlayStack.filter(x=>x!==id); }
+
+/* Đóng panel chi tiết (bên phải) với hiệu ứng trượt/mờ dần thay vì biến mất đột
+   ngột — dùng khi chuyển sang danh sách khác (vd "Xem danh sách nhân sự") rồi
+   quay lại, cho cảm giác mượt hơn. Trả về Promise, chờ hết animation mới resolve
+   để hàm gọi có thể tiếp tục đổi nội dung ngay sau khi panel đã đóng hẳn. */
+function closeSidePanelSmooth(){
+  return new Promise(resolve=>{
+    const overlay = document.getElementById("sidePanelOverlay");
+    if(!overlay.classList.contains("show")){ resolve(); return; }
+    popOverlay("sidePanelOverlay");
+    overlay.classList.add("closing");
+    setTimeout(()=>{
+      overlay.classList.remove("show");
+      overlay.classList.remove("closing");
+      resolve();
+    }, 180);
+  });
+}
+/* Kích hoạt lại hiệu ứng mờ dần (fade-in nhẹ) cho 1 khối nội dung vừa được thay
+   mới (đổi innerHTML) — vd bảng danh sách, dashboard Tổng quan... để việc
+   chuyển đổi giữa các màn hình mượt hơn thay vì đổi nội dung đột ngột. */
+function fadeInEl(el){
+  if(!el) return;
+  el.classList.remove("fade-swap");
+  void el.offsetWidth; // ép trình duyệt tính lại layout để animation chạy lại từ đầu
+  el.classList.add("fade-swap");
+}
 function setupOverlayOutsideClick(id, closeFn){
   const el = document.getElementById(id);
   if(!el) return;
@@ -1283,6 +1319,7 @@ document.getElementById("pbBackBtn").onclick = ()=> backToPhongBan();
    ban), đồng thời ghi nhớ để hiện nút "‹ Quay lại phòng ban" — bấm vào sẽ mở
    lại đúng panel chi tiết phòng ban vừa xem trước đó. */
 async function openPhongBanNhanSu(pbMa, pbTen){
+  await closeSidePanelSmooth();
   await switchSheet("nhan_vien", { label:`Phòng ban: ${pbTen}`, predicate: r => String(r.phongban_ma) === String(pbMa) });
   pbReturnState = { id: pbMa };
   renderFilterChip();
@@ -1646,6 +1683,7 @@ async function renderTable(){
       <div class="lead">Không có bản ghi phù hợp</div>
       <div>Thử bỏ bớt bộ lọc hoặc bấm "Thêm mới" để bắt đầu ghi nhận.</div>
     </div>`;
+    fadeInEl(wrap);
     wrap.querySelectorAll("[data-qf]").forEach(sel=>{
       sel.onchange = ()=>{
         quickFilters[sel.dataset.qf] = sel.value;
@@ -1688,6 +1726,13 @@ async function renderTable(){
       pageRows.forEach(row => { ccTenMap[row.cong_cu_ma] = computeCongCuTen(row, specRows); });
     }
   }
+  // Phòng ban: đếm số nhân sự thuộc từng phòng ban (cột ảo, không có trong sheet gốc)
+  let pbSoLuongNsMap = null;
+  if(currentSheet === "phong_ban" && cfg.table.includes("so_luong_nhan_su")){
+    const nvRows = await apiList("nhan_vien");
+    pbSoLuongNsMap = {};
+    nvRows.forEach(nv => { const k = nv.phongban_ma; pbSoLuongNsMap[k] = (pbSoLuongNsMap[k]||0) + 1; });
+  }
 
   const curSort = sortState[currentSheet];
   const theadHtml = `<tr>${cfg.table.map(f=>{
@@ -1706,6 +1751,9 @@ async function renderTable(){
         val = dmChaTenMap[row.danh_muc_cha] || dmChaTenMap[String(row.danh_muc_cha||"").trim()] || dmChaTenMap[normalizeCodeKey(row.danh_muc_cha)] || null;
       }else if(f === "danh_muc_ma_ten" && dmTenMap){
         val = dmTenMap[row.danh_muc_ma] || null;
+      }else if(f === "so_luong_nhan_su" && pbSoLuongNsMap){
+        const n = pbSoLuongNsMap[row.phongban_ma] || 0;
+        val = `<span class="tag">${n} người</span>`;
       }else{
         val = row[f];
         if(NUMBER_FIELDS.has(f)) val = formatNumber(val);
@@ -1734,6 +1782,7 @@ async function renderTable(){
 
   const filterBarHtml = buildFilterBarHtml(cfg, filterRelMaps, extraOptions);
   wrap.innerHTML = `${filterBarHtml}<div class="table-scroll"><table><thead>${theadHtml}</thead><tbody>${rowsHtml}</tbody></table></div>`;
+  fadeInEl(wrap);
   wrap.querySelectorAll("[data-qf]").forEach(sel=>{
     sel.onchange = ()=>{
       quickFilters[sel.dataset.qf] = sel.value;
@@ -1792,6 +1841,11 @@ async function buildExportDataForSheet(sheet, rowsInput){
     const pbMap = await relationMap({ sheet:"phong_ban", value:"phongban_ma", text:"phongban_ten" });
     const nvByMa = {}; nvRows.forEach(n => nvByMa[n.nhanvien_ma] = n);
     extraCols.push({ label:"Phòng ban", fn: r => { const nv = nvByMa[r.nhanvien_ma]; return nv ? (pbMap[nv.phongban_ma] || "") : ""; } });
+  }
+  if(sheet === "phong_ban"){
+    const nvRows = await apiList("nhan_vien");
+    const cnt = {}; nvRows.forEach(nv => { cnt[nv.phongban_ma] = (cnt[nv.phongban_ma]||0) + 1; });
+    extraCols.push({ label:"Số lượng nhân sự", fn: r => cnt[r.phongban_ma] || 0 });
   }
   if(sheet === "danhmuc_chitiet"){
     const dmMap = await relationMap({ sheet:"danh_muc", value:"danh_muc_ma", text:"danh_muc_ten" });
@@ -2458,6 +2512,7 @@ async function renderOverview(forceReload){
       ])}
     </div>
   </div>`;
+  fadeInEl(document.getElementById("ovContent"));
 
   const icon = document.getElementById("ovRefreshIcon");
   icon.classList.remove("spin");
@@ -2824,6 +2879,7 @@ async function renderHoaDon(){
     <thead><tr><th>Tên công cụ</th><th>Người đi sửa</th><th>Ngày sửa</th><th>Trạng thái</th><th>Hoá đơn</th></tr></thead>
     <tbody>${rowsHtml || `<tr><td colspan="5" class="muted" style="text-align:center;padding:26px;">Không tìm thấy hoá đơn phù hợp</td></tr>`}</tbody>
   </table></div>`;
+  fadeInEl(wrap);
 }
 
 function isHttpUrl(u){ return /^https?:\/\//i.test(String(u||"").trim()); }
@@ -3001,7 +3057,7 @@ async function openRecordPanel(sheet, id){
   pushOverlay("sidePanelOverlay");
   document.getElementById("sidePanelOverlay").classList.add("show");
 }
-document.getElementById("spClose").onclick = () => { popOverlay("sidePanelOverlay"); document.getElementById("sidePanelOverlay").classList.remove("show"); };
+document.getElementById("spClose").onclick = () => closeSidePanelSmooth();
 
 /* xây bản đồ mã -> tên cho các trường có quan hệ (dùng ở panel chi tiết) */
 async function buildRelMaps(sheet){
@@ -3370,7 +3426,7 @@ window.addEventListener("resize", repositionOpenFullOverlays);
   setupOverlayOutsideClick("formOverlay", closeForm);
   setupOverlayOutsideClick("detailOverlay", ()=>{ popOverlay("detailOverlay"); document.getElementById("detailOverlay").classList.remove("show"); });
   setupOverlayOutsideClick("confirmOverlay", ()=>{ popOverlay("confirmOverlay"); document.getElementById("confirmOverlay").classList.remove("show"); });
-  setupOverlayOutsideClick("sidePanelOverlay", ()=>{ popOverlay("sidePanelOverlay"); document.getElementById("sidePanelOverlay").classList.remove("show"); });
+  setupOverlayOutsideClick("sidePanelOverlay", ()=> closeSidePanelSmooth());
   document.getElementById("invoiceOverlayClose").onclick = ()=>{ popOverlay("invoiceOverlay"); document.getElementById("invoiceOverlay").classList.remove("show"); };
   setupOverlayOutsideClick("invoiceOverlay", ()=>{ popOverlay("invoiceOverlay"); document.getElementById("invoiceOverlay").classList.remove("show"); });
   await switchSheet("tong_quan");
