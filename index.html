@@ -532,6 +532,7 @@
     <nav class="nav" id="nav"></nav>
     <div class="sidebar-foot">Đồng bộ trực tiếp với Google Sheet nội bộ
       <div style="margin-top:6px;"><a href="javascript:void(0)" onclick="promptEditPassword('Nhập mật khẩu chỉnh sửa (để trống nếu không cần):')" style="color:#B9C6B3;text-decoration:underline;">Đặt/đổi mật khẩu chỉnh sửa</a></div>
+      <div style="margin-top:4px;"><a href="javascript:void(0)" onclick="const n=window.prompt('Tên của bạn (hiển thị trong Nhật ký):', getActorName()); if(n!=null) setActorName(n.trim());" style="color:#B9C6B3;text-decoration:underline;">Đặt tên hiển thị trong Nhật ký</a></div>
     </div>
   </aside>
   <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
@@ -558,6 +559,11 @@
         <button class="btn btn-ghost" id="exportBtn" title="Xuất toàn bộ số liệu (kể cả cột ẩn/liên quan) ra file Excel">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v13m0 0l4-4m-4 4l-4-4"/><path d="M4 21h16"/></svg>
           Xuất Excel
+        </button>
+        <input type="file" id="importFileInput" accept=".xlsx,.xls,.csv" style="display:none">
+        <button class="btn btn-ghost" id="importBtn" title="Nhập hàng loạt từ file Excel (thêm mới hoặc cập nhật theo khoá chính)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21V8m0 0l-4 4m4-4l4 4"/><path d="M4 21h16"/></svg>
+          Nhập Excel
         </button>
         <button class="btn btn-primary" id="addBtn">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12h14"/></svg>
@@ -737,7 +743,9 @@ const LABELS = {
   danh_muc_ma_ten:"Tên danh mục",
   ma_qua_tang:"Quà tặng/Đồng phục", ngay_phat:"Ngày phát quà",
   so_luot:"Số lượt đã nhận", lan_phat_gan_nhat:"Lần phát gần nhất",
-  hoadon_url:"Hoá đơn (ảnh/URL)"
+  hoadon_url:"Hoá đơn (ảnh/URL)",
+  nhatky_ma:"Mã nhật ký", thoigian:"Thời gian", nguoi_thuc_hien:"Người thực hiện",
+  hanh_dong:"Hành động", ma_ban_ghi:"Mã bản ghi", chi_tiet:"Chi tiết"
 };
 /* nhãn riêng theo từng sheet, ưu tiên hơn nhãn dùng chung ở trên (tránh nhầm lẫn
    khi cùng 1 tên cột nhưng ý nghĩa khác nhau ở mỗi sheet, vd trang_thai) */
@@ -871,6 +879,18 @@ const CONFIG = {
   hoa_don: {
     label:"Hoá đơn", desc:"Hoá đơn sửa chữa / mua sắm công cụ dụng cụ (cột hoadon_url trong lịch sử công cụ)",
     icon:iconReceipt(), isHoaDon:true, hideToolbar:true
+  },
+  nhac_viec: {
+    label:"Nhắc việc", desc:"Công cụ sắp hết bảo hành, nhân sự sắp hết hạn thử việc, thiếu ảnh đại diện",
+    icon:iconBell(), isReminders:true, hideToolbar:true
+  },
+  nhat_ky: {
+    label:"Nhật ký", desc:"Lịch sử Thêm/Sửa/Xoá trên toàn hệ thống (audit log)",
+    icon:iconHistory(), pk:["nhatky_ma"], readOnly:true,
+    table:["thoigian","nguoi_thuc_hien","hanh_dong","sheet","ma_ban_ghi"],
+    sections:[{title:"Chi tiết nhật ký", fields:["nhatky_ma","thoigian","nguoi_thuc_hien","hanh_dong","sheet","ma_ban_ghi","chi_tiet"]}],
+    relations:{},
+    filters:["hanh_dong","sheet"]
   }
 };
 
@@ -887,6 +907,8 @@ function iconChart(){return `<svg width="17" height="17" viewBox="0 0 24 24" fil
 function iconDocument(){return `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M7 3h7l4 4v14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v4h4M9 12h6M9 16h6"/></svg>`;}
 function iconReceipt(){return `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 2h12v19l-2.5-1.5L13 21l-2.5-1.5L8 21l-2-1.5z"/><path d="M9 7h6M9 11h6M9 15h4"/></svg>`;}
 function iconClock(){return `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>`;}
+function iconBell(){return `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>`;}
+function iconUpload(){return `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21V8m0 0l-4 4m4-4l4 4"/><path d="M4 21h16"/></svg>`;}
 
 /* ================= MỤC 10: "TRUY CẬP GẦN ĐÂY" =================
    Ghi nhớ tối đa 5 bản ghi vừa mở panel/chi tiết gần nhất (mọi sheet), lưu
@@ -925,6 +947,10 @@ const NAV_TREE = [
     { key:"cong_cu", children:["danh_muc","danhmuc_chitiet","thuoc_tinh","lichsu_congcu"] },
     { key:"giay_to", children:["bien_ban","hoa_don"] },
     { key:"qua_tang" }
+  ]},
+  { section:"NHẮC VIỆC & NHẬT KÝ", items:[
+    { key:"nhac_viec" },
+    { key:"nhat_ky" }
   ]}
 ];
 let expandedGroups = new Set(["cong_cu"]);
@@ -1031,6 +1057,10 @@ function promptEditPassword(message){
   if(pw != null) setEditPassword(pw.trim());
   return pw != null;
 }
+
+/* ---------- tên người thao tác (ghi vào Nhật ký/audit log, Nhóm C.12) ---------- */
+function getActorName(){ return localStorage.getItem("hcns_actor_name") || ""; }
+function setActorName(n){ localStorage.setItem("hcns_actor_name", n || ""); }
 
 /* ---------- helpers gọi API ---------- */
 /* Chỉ mục tìm kiếm dạng chuỗi (gộp mọi giá trị của 1 dòng, viết thường) được
@@ -1142,7 +1172,7 @@ async function apiFetchNextCode(sheet, fieldOverride){
    - Lỗi mật khẩu (authError) -> hỏi lại mật khẩu 1 lần rồi tự thử lại.
    - Lỗi LOGIC khác (trùng mã, dữ liệu không hợp lệ...) -> ném Error thường. */
 async function apiWriteRemote(action, sheet, payload, _isRetry){
-  const body = { action, sheet, editPassword: getEditPassword() };
+  const body = { action, sheet, editPassword: getEditPassword(), nguoi_thuc_hien: getActorName() };
   if(payload && payload.id != null) body.id = payload.id;
   if(payload && payload.data != null) body.data = payload.data;
   const json = await apiPost(body);
@@ -1413,7 +1443,7 @@ async function refreshCounts(){
   // khi khởi động, số đếm ở sidebar hiện ra nhanh hơn nhiều thay vì phải chờ
   // hết sheet này đến sheet khác (mỗi round-trip Apps Script có độ trễ riêng).
   const keys = Object.keys(CONFIG).filter(key =>
-    !CONFIG[key].isOverview && !CONFIG[key].isGroup && !CONFIG[key].isBienBan && !CONFIG[key].isHoaDon
+    !CONFIG[key].isOverview && !CONFIG[key].isGroup && !CONFIG[key].isBienBan && !CONFIG[key].isHoaDon && !CONFIG[key].isReminders
   );
   await Promise.all(keys.map(async key => {
     try{
@@ -1457,12 +1487,13 @@ async function switchSheet(key, filter){
   setSidebarOpen(false);
   renderFilterChip();
   const hideToolbar = !!(cfg.isOverview || cfg.hideToolbar);
-  document.getElementById("addBtn").style.display = hideToolbar ? "none" : "inline-flex";
+  document.getElementById("addBtn").style.display = (hideToolbar || cfg.readOnly) ? "none" : "inline-flex";
+  document.getElementById("importBtn").style.display = (hideToolbar || cfg.readOnly || !cfg.table) ? "none" : "inline-flex";
   document.querySelector(".search-box").style.display = hideToolbar ? "none" : "flex";
   document.querySelector(".ledger .foot-row").style.display = hideToolbar ? "none" : "flex";
   const canExport = !!(cfg.table || cfg.isHoaDon || cfg.isOverview);
   document.getElementById("exportBtn").style.display = canExport ? "inline-flex" : "none";
-  document.querySelector(".ledger").classList.toggle("plain", !!cfg.isOverview);
+  document.querySelector(".ledger").classList.toggle("plain", !!(cfg.isOverview || cfg.isReminders));
   if(cfg.isOverview){
     await renderOverview();
     overviewTimer = setInterval(()=> renderOverview(true), 5*60*1000);
@@ -1470,6 +1501,8 @@ async function switchSheet(key, filter){
     await renderBienBan();
   }else if(cfg.isHoaDon){
     await renderHoaDon();
+  }else if(cfg.isReminders){
+    await renderReminders();
   }else{
     await loadTable();
   }
@@ -1981,7 +2014,7 @@ async function renderTable(){
   // mục 8: chọn hàng loạt (bulk) chỉ áp dụng cho danh sách thường (không áp dụng
   // cho sheet đã gộp dòng theo nhân sự như qua_tang, vì "id" ở đó không phải 1
   // bản ghi thô mà là 1 nhóm nhiều dòng)
-  const canBulk = !isGrouped;
+  const canBulk = !isGrouped && !cfg.readOnly;
 
   // hàm tính giá trị hiển thị cho 1 cột trên 1 dòng — dùng chung cho cả bảng
   // (desktop) và card (mobile) để khỏi lặp logic
@@ -2036,18 +2069,20 @@ async function renderTable(){
     const detailBtn = cfg.hasDetail ? `<button class="icon-btn" title="Xem chi tiết" onclick="openDetail('${escAttr(id)}')">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="2.6"/></svg>
       </button>` : "";
+    const editDelBtns = cfg.readOnly ? "" : `
+        <button class="icon-btn" title="Sửa" onclick="event.stopPropagation();openForm('${escAttr(id)}')">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+        </button>
+        <button class="icon-btn danger" title="Xoá" onclick="event.stopPropagation();confirmDelete('${escAttr(id)}')">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>
+        </button>`;
     const checkTd = canBulk ? `<td class="col-check" onclick="event.stopPropagation();"><input type="checkbox" data-rowchk="${escAttr(id)}" ${selectedIds.has(id)?"checked":""}></td>` : "";
     return `<tr class="clickable-row${selectedIds.has(id)?" row-selected":""}" onclick="handleRowClick(event,'${escAttr(id)}')">
       ${checkTd}
       ${cells}
       <td class="col-actions">
         ${detailBtn}
-        <button class="icon-btn" title="Sửa" onclick="event.stopPropagation();openForm('${escAttr(id)}')">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
-        </button>
-        <button class="icon-btn danger" title="Xoá" onclick="event.stopPropagation();confirmDelete('${escAttr(id)}')">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>
-        </button>
+        ${editDelBtns}
       </td>
     </tr>`;
   }).join("");
@@ -2073,12 +2108,13 @@ async function renderTable(){
         : `${cfg.hasDetail?`<button class="icon-btn" title="Xem chi tiết" onclick="event.stopPropagation();openDetail('${escAttr(id)}')">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="2.6"/></svg>
           </button>`:""}
+          ${cfg.readOnly ? "" : `
           <button class="icon-btn" title="Sửa" onclick="event.stopPropagation();openForm('${escAttr(id)}')">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
           </button>
           <button class="icon-btn danger" title="Xoá" onclick="event.stopPropagation();confirmDelete('${escAttr(id)}')">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>
-          </button>`;
+          </button>`}`;
       return `<div class="rec-card${(!isGrouped && selectedIds.has(id))?" selected":""}" ${clickAttr}>
         <div class="rec-card-top">${checkbox}<div class="rec-card-title">${titleVal}</div></div>
         ${rowsInner}
@@ -2338,6 +2374,94 @@ async function exportListToExcel(){
   }
 }
 document.getElementById("exportBtn").onclick = exportListToExcel;
+
+/* ================= NHẬP EXCEL HÀNG LOẠT (Nhóm C.13) =================
+   Đọc file .xlsx/.xls/.csv (dòng đầu là tiêu đề cột — chấp nhận cả nhãn tiếng
+   Việt như file đã xuất từ chính app, lẫn tên cột kỹ thuật gốc như cong_cu_ma).
+   Mỗi dòng được so khớp khoá chính với dữ liệu hiện có: trùng khoá -> Cập
+   nhật, chưa có -> Thêm mới. Áp dụng qua đúng hàng đợi đồng bộ ngầm
+   (queueOperation) như thao tác Thêm/Sửa thông thường -> vẫn có validate,
+   optimistic UI, audit log phía server như bình thường. ===================== */
+document.getElementById("importBtn").onclick = ()=> document.getElementById("importFileInput").click();
+document.getElementById("importFileInput").onchange = handleImportFile;
+
+async function handleImportFile(e){
+  const file = e.target.files[0];
+  e.target.value = "";
+  if(!file) return;
+  if(typeof XLSX === "undefined"){ toast("Không tải được thư viện đọc Excel.", true); return; }
+  const cfg = CONFIG[currentSheet];
+  const sheet = currentSheet;
+  if(!cfg.table || cfg.readOnly){ toast("Danh sách này không hỗ trợ nhập Excel.", true); return; }
+  const btn = document.getElementById("importBtn");
+  btn.disabled = true;
+  try{
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type:"array", cellDates:false });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const json = XLSX.utils.sheet_to_json(ws, { defval:"" });
+    if(!json.length){ toast("File không có dữ liệu để nhập", true); return; }
+
+    // nhãn tiếng Việt -> tên cột kỹ thuật (đảo ngược L()); cũng chấp nhận đúng
+    // tên cột kỹ thuật gốc nếu người dùng tự soạn file
+    const allFieldKeys = cfg.sections.flatMap(s=>s.fields);
+    const labelToKey = {};
+    allFieldKeys.forEach(f=>{ labelToKey[L(f, sheet)] = f; labelToKey[f] = f; });
+
+    const existingRows = await apiList(sheet);
+    const existingSet = new Set(existingRows.map(r=>idOf(r, cfg.pk)));
+
+    let created = 0, updated = 0, skipped = 0;
+    const errs = [];
+    json.forEach((row, i)=>{
+      const data = {};
+      Object.entries(row).forEach(([k,v])=>{
+        const key = labelToKey[String(k).trim()];
+        if(!key) return;
+        if(v == null) { data[key] = ""; return; }
+        // ngày kiểu số serial Excel -> dd/mm/yyyy; ngày dạng yyyy-mm-dd -> dd/mm/yyyy
+        if(DATE_FIELDS_HINT(key)){
+          if(typeof v === "number"){
+            const dt = XLSX.SSF.parse_date_code(v);
+            data[key] = dt ? `${String(dt.d).padStart(2,"0")}/${String(dt.m).padStart(2,"0")}/${dt.y}` : "";
+            return;
+          }
+          const s = String(v).trim();
+          data[key] = /^\d{4}-\d{2}-\d{2}/.test(s) ? isoToVn(s.slice(0,10)) : s;
+          return;
+        }
+        data[key] = String(v).trim();
+      });
+      const missingPk = cfg.pk.filter(f=>!data[f]);
+      if(missingPk.length){ skipped++; errs.push(`Dòng ${i+2}: thiếu ${missingPk.map(f=>L(f,sheet)).join(", ")}`); return; }
+      const errors = validateRecordData(data, sheet);
+      if(errors.length){ skipped++; errs.push(`Dòng ${i+2}: ${errors.join("; ")}`); return; }
+      const id = idOf(data, cfg.pk);
+      const isUpdate = existingSet.has(id);
+      queueOperation(isUpdate ? "update" : "create", sheet, isUpdate ? id : null, data, ()=>{
+        if(!dataCache[sheet]) dataCache[sheet] = [];
+        if(isUpdate){
+          const idx = dataCache[sheet].findIndex(r=>idOf(r,cfg.pk)===id);
+          if(idx>-1) dataCache[sheet][idx] = { ...dataCache[sheet][idx], ...data };
+        }else{
+          dataCache[sheet] = [...dataCache[sheet], { ...data }];
+          existingSet.add(id);
+        }
+      });
+      if(isUpdate) updated++; else created++;
+    });
+
+    refreshCounts();
+    if(currentSheet===sheet) loadTable();
+    const summary = `Nhập Excel: thêm ${created}, cập nhật ${updated}${skipped?`, bỏ qua ${skipped} dòng lỗi`:""} (đang đồng bộ ngầm…)`;
+    toast(summary, skipped>0);
+    if(errs.length) console.warn("Chi tiết dòng bị bỏ qua khi nhập Excel:\n" + errs.join("\n"));
+  }catch(err){
+    toast("Nhập Excel thất bại: " + err.message, true);
+  }finally{
+    btn.disabled = false;
+  }
+}
 
 document.getElementById("searchInput").addEventListener("input", debounce(async ()=>{
   page = 1;
@@ -3310,6 +3434,87 @@ function openInvoiceImage(url){
   document.getElementById("invoiceOverlay").classList.add("show");
 }
 
+/* ---------- Nhóm C.11: Nhắc việc (công cụ sắp hết bảo hành, nhân sự sắp hết
+   hạn thử việc, thiếu ảnh đại diện) — tính hoàn toàn phía trình duyệt dựa trên
+   dữ liệu đã có (nhan_vien, lichsu_congcu, cong_cu), không cần thêm API. ---------- */
+const NV_WARRANTY_ALERT_DAYS = 15;   // trùng WARRANTY_ALERT_DAYS bên Code.gs
+const NV_PROBATION_DAYS = 60;        // thời hạn thử việc mặc định (ngày)
+const NV_PROBATION_ALERT_DAYS = 15;  // cảnh báo trước khi hết hạn thử việc bao nhiêu ngày
+
+function _parseVnDateFE(d){
+  const m = String(d||"").trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if(!m) return null;
+  return new Date(Number(m[3]), Number(m[2])-1, Number(m[1]));
+}
+async function renderReminders(){
+  const wrap = document.getElementById("tableWrap");
+  document.getElementById("rowInfo").textContent = "";
+  document.getElementById("pager").innerHTML = "";
+  wrap.innerHTML = `<div class="loading-row">Đang tính toán nhắc việc…</div>`;
+
+  const [nvRows, hisRows, ccRows] = await Promise.all([
+    apiList("nhan_vien"), apiList("lichsu_congcu"), apiList("cong_cu")
+  ]);
+  const ccByMa = {}; ccRows.forEach(c=>{ ccByMa[c.cong_cu_ma] = c; });
+  const today = new Date(); today.setHours(0,0,0,0);
+  const diffDays = d => Math.round((d - today) / 86400000);
+
+  const warrantyItems = hisRows.map(h=>{
+    const d = _parseVnDateFE(h.han_bao_hanh);
+    if(!d) return null;
+    const days = diffDays(d);
+    if(days < 0 || days > NV_WARRANTY_ALERT_DAYS) return null;
+    return { h, days };
+  }).filter(Boolean).sort((a,b)=>a.days-b.days);
+
+  const probationItems = nvRows.map(nv=>{
+    if(nv.ngay_chinh_thuc) return null; // đã chính thức -> hết diện thử việc
+    const d = _parseVnDateFE(nv.ngay_thu_viec);
+    if(!d) return null;
+    const hetHan = new Date(d); hetHan.setDate(hetHan.getDate() + NV_PROBATION_DAYS);
+    const days = diffDays(hetHan);
+    if(days > NV_PROBATION_ALERT_DAYS) return null;
+    return { nv, days };
+  }).filter(Boolean).sort((a,b)=>a.days-b.days);
+
+  const noPhotoItems = nvRows.filter(nv =>
+    String(nv.tinh_trang||"").toLowerCase().includes("đang") && !(nv.photo_url && String(nv.photo_url).trim())
+  );
+
+  function section(title, desc, items, renderItem){
+    return `<div class="ov-card" style="grid-column:1/-1;">
+      <div class="ov-card-head"><h3>${title} (${items.length})</h3><span>${desc}</span></div>
+      ${items.length ? items.map(renderItem).join("") : '<p class="muted">Không có mục nào cần nhắc 🎉</p>'}
+    </div>`;
+  }
+
+  wrap.innerHTML = `<div class="ov-grid" style="grid-template-columns:1fr;gap:16px;">
+    ${section("⏰ Công cụ sắp/đang hết hạn bảo hành", `Trong ${NV_WARRANTY_ALERT_DAYS} ngày tới`, warrantyItems, x => {
+      const cc = ccByMa[x.h.cong_cu_ma];
+      const ten = cc ? (cc.cong_cu_ten || cc.cong_cu_ma) : x.h.cong_cu_ma;
+      const label = x.days===0 ? "Hết hạn hôm nay" : `Còn ${x.days} ngày`;
+      return `<div class="sp-history-item" onclick="openDetail('${escAttr(x.h.cong_cu_ma)}')">
+        <div class="sp-history-top"><b>${ten}</b><span class="tag ${x.days<=3?'clay':'honey'}">${label}</span></div>
+        <div class="muted" style="font-size:12.5px;">Hạn bảo hành: ${x.h.han_bao_hanh} · Mã công cụ: ${x.h.cong_cu_ma}</div>
+      </div>`;
+    })}
+    ${section("🧑‍💼 Nhân sự sắp/đã hết hạn thử việc", `Thử việc ${NV_PROBATION_DAYS} ngày, cảnh báo trước ${NV_PROBATION_ALERT_DAYS} ngày`, probationItems, x => {
+      const label = x.days < 0 ? `Quá hạn ${-x.days} ngày` : (x.days===0 ? "Hết hạn hôm nay" : `Còn ${x.days} ngày`);
+      return `<div class="sp-history-item" onclick="openRecordPanel('nhan_vien','${escAttr(x.nv.nhanvien_ma)}')">
+        <div class="sp-history-top"><b>${x.nv.nhanvien_ten}</b><span class="tag ${x.days<0?'clay':'honey'}">${label}</span></div>
+        <div class="muted" style="font-size:12.5px;">Bắt đầu thử việc: ${x.nv.ngay_thu_viec} · Mã: ${x.nv.nhanvien_ma}</div>
+      </div>`;
+    })}
+    ${section("🖼️ Nhân sự chưa có ảnh đại diện", "Đang làm việc nhưng chưa có photo_url", noPhotoItems, nv => {
+      return `<div class="sp-history-item" onclick="openRecordPanel('nhan_vien','${escAttr(nv.nhanvien_ma)}')">
+        <div class="sp-history-top"><b>${nv.nhanvien_ten}</b><span class="tag gray">Thiếu ảnh</span></div>
+        <div class="muted" style="font-size:12.5px;">Mã: ${nv.nhanvien_ma}</div>
+      </div>`;
+    })}
+  </div>`;
+  fadeInEl(wrap);
+}
+
 /* ---------- picker khoá ngoại: nháy đúp để chọn từ danh sách ---------- */
 let relPickState = null;
 async function openRelPicker(relCfg, titleText, onSelect){
@@ -3640,9 +3845,10 @@ async function renderSpInfo(){
       <div class="sp-fields-grid">${sec.fields.filter(f=>!HIDDEN_IN_VIEW_FIELDS.has(f)).map(f => spFieldView(f, record[f], spState.sheet, spState.relMaps)).join("")}</div>
     </div>`).join("");
 
-  document.getElementById("spFoot").style.display = "flex";
+  document.getElementById("spFoot").style.display = cfg.readOnly ? "none" : "flex";
   const editBtn = document.getElementById("spEditBtn");
   const saveBtn = document.getElementById("spSaveBtn");
+  if(cfg.readOnly) return;
   editBtn.style.display = "inline-flex";
   editBtn.textContent = "Sửa";
   editBtn.disabled = false;
@@ -3905,7 +4111,7 @@ window.addEventListener("resize", repositionOpenFullOverlays);
 window.addEventListener("resize", debounce(()=>{
   // đổi qua lại giữa bảng (desktop) <-> card (mobile) khi kéo giãn cửa sổ
   const cfg = CONFIG[currentSheet];
-  if(cfg && !cfg.isOverview && !cfg.isBienBan && !cfg.isHoaDon && dataCache[currentSheet]) renderTable();
+  if(cfg && !cfg.isOverview && !cfg.isBienBan && !cfg.isHoaDon && !cfg.isReminders && dataCache[currentSheet]) renderTable();
 }, 200));
 
 /* ---------- mục 7: phím tắt — Esc đóng overlay đang mở, Ctrl/Cmd+Enter lưu form đang mở ---------- */
