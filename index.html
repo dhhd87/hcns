@@ -741,7 +741,7 @@ const LABELS = {
   danh_muc_ten:"Tên danh mục", nhom:"Nhóm", hinh_thuc:"Hình thức", ten_nhom:"Tên nhóm lớn",
   danh_muc_cha:"Thuộc danh mục cha", danh_muc_cha_ten:"Tên danh mục cha",
   danh_muc_ma_ten:"Tên danh mục",
-  ma_qua_tang:"Quà tặng/Đồng phục", ngay_phat:"Ngày phát quà",
+  ma_qua_tang:"Quà tặng/Đồng phục", ngay_phat:"Ngày phát quà", ngay_tra:"Ngày trả",
   so_luot:"Số lượt đã nhận", lan_phat_gan_nhat:"Lần phát gần nhất",
   hoadon_url:"Hoá đơn (ảnh/URL)",
   nhatky_ma:"Mã nhật ký", thoigian:"Thời gian", nguoi_thuc_hien:"Người thực hiện",
@@ -861,7 +861,7 @@ const CONFIG = {
     icon:iconGift(), pk:["nhanvien_ma","ma_qua_tang"],
     table:["nhanvien_ma","phongban_ten","so_luot","lan_phat_gan_nhat"],
     groupField:"nhanvien_ma",
-    sections:[{title:"Thông tin phát quà/đồng phục", fields:["nhanvien_ma","ma_qua_tang","ngay_phat"]}],
+    sections:[{title:"Thông tin phát quà/đồng phục", fields:["nhanvien_ma","ma_qua_tang","ngay_phat","ngay_tra"]}],
     relations:{
       nhanvien_ma:{sheet:"nhan_vien", value:"nhanvien_ma", text:"nhanvien_ten", autofill:{nhanvien_ten:"nhanvien_ten"}},
       ma_qua_tang:{sheet:"danh_muc", value:"danh_muc_ma", text:"danh_muc_ten", filter:r=>isQuaTangNhom(r.nhom)}
@@ -3439,7 +3439,11 @@ function openInvoiceImage(url){
    dữ liệu đã có (nhan_vien, lichsu_congcu, cong_cu), không cần thêm API. ---------- */
 const NV_WARRANTY_ALERT_DAYS = 15;   // trùng WARRANTY_ALERT_DAYS bên Code.gs
 const NV_PROBATION_DAYS = 60;        // thời hạn thử việc mặc định (ngày)
-const NV_PROBATION_ALERT_DAYS = 15;  // cảnh báo trước khi hết hạn thử việc bao nhiêu ngày
+const NV_PROBATION_ALERT_DAYS = 10;  // cảnh báo trước khi hết hạn thử việc bao nhiêu ngày
+const NV_RESIGN_GIFT_ALERT_DAYS = 10; // nghỉ việc quá bao nhiêu ngày mà chưa trả quà/đồng phục thì cảnh báo
+const NV_NOPHOTO_TOP_N = 10;         // mặc định chỉ hiện top N nhân sự thiếu ảnh, bấm "Xem toàn bộ" để mở hết
+let remindersNoPhotoExpanded = false;
+function toggleNoPhotoExpand(){ remindersNoPhotoExpanded = !remindersNoPhotoExpanded; renderReminders(); }
 
 function _parseVnDateFE(d){
   const m = String(d||"").trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
@@ -3452,10 +3456,11 @@ async function renderReminders(){
   document.getElementById("pager").innerHTML = "";
   wrap.innerHTML = `<div class="loading-row">Đang tính toán nhắc việc…</div>`;
 
-  const [nvRows, hisRows, ccRows] = await Promise.all([
-    apiList("nhan_vien"), apiList("lichsu_congcu"), apiList("cong_cu")
+  const [nvRows, hisRows, ccRows, qtRows, dmRows] = await Promise.all([
+    apiList("nhan_vien"), apiList("lichsu_congcu"), apiList("cong_cu"), apiList("qua_tang"), apiList("danh_muc")
   ]);
   const ccByMa = {}; ccRows.forEach(c=>{ ccByMa[c.cong_cu_ma] = c; });
+  const dmName = {}; dmRows.forEach(d=>{ dmName[d.danh_muc_ma] = d.danh_muc_ten; });
   const today = new Date(); today.setHours(0,0,0,0);
   const diffDays = d => Math.round((d - today) / 86400000);
 
@@ -3477,14 +3482,35 @@ async function renderReminders(){
     return { nv, days };
   }).filter(Boolean).sort((a,b)=>a.days-b.days);
 
-  const noPhotoItems = nvRows.filter(nv =>
+  const noPhotoItemsFull = nvRows.filter(nv =>
     String(nv.tinh_trang||"").toLowerCase().includes("đang") && !(nv.photo_url && String(nv.photo_url).trim())
   );
+  const noPhotoTotal = noPhotoItemsFull.length;
+  const noPhotoItems = remindersNoPhotoExpanded ? noPhotoItemsFull : noPhotoItemsFull.slice(0, NV_NOPHOTO_TOP_N);
+  const noPhotoMoreBtn = noPhotoTotal > NV_NOPHOTO_TOP_N
+    ? `<div style="text-align:center;margin-top:10px;">
+        <button class="btn btn-ghost btn-sm" onclick="toggleNoPhotoExpand()">${remindersNoPhotoExpanded ? "Thu gọn" : `Xem toàn bộ (${noPhotoTotal})`}</button>
+      </div>`
+    : "";
 
-  function section(title, desc, items, renderItem){
+  // Nghỉ việc quá NV_RESIGN_GIFT_ALERT_DAYS ngày mà vẫn còn giữ quà tặng/đồng phục
+  // (chưa điền cột ngay_tra) -> cần thu hồi.
+  const resignGiftItems = nvRows.map(nv=>{
+    if(!nv.ngay_nghi_viec) return null;
+    const d = _parseVnDateFE(nv.ngay_nghi_viec);
+    if(!d) return null;
+    const days = diffDays(d); // âm = đã qua
+    if(days > -NV_RESIGN_GIFT_ALERT_DAYS) return null; // chưa đủ số ngày quy định
+    const unreturned = qtRows.filter(q => q.nhanvien_ma === nv.nhanvien_ma && !(q.ngay_tra && String(q.ngay_tra).trim()));
+    if(!unreturned.length) return null;
+    return { nv, daysAgo: -days, items: unreturned };
+  }).filter(Boolean).sort((a,b)=>b.daysAgo-a.daysAgo);
+
+  function section(title, desc, items, renderItem, extraHtml){
     return `<div class="ov-card" style="grid-column:1/-1;">
       <div class="ov-card-head"><h3>${title} (${items.length})</h3><span>${desc}</span></div>
       ${items.length ? items.map(renderItem).join("") : '<p class="muted">Không có mục nào cần nhắc 🎉</p>'}
+      ${extraHtml || ""}
     </div>`;
   }
 
@@ -3505,12 +3531,19 @@ async function renderReminders(){
         <div class="muted" style="font-size:12.5px;">Bắt đầu thử việc: ${x.nv.ngay_thu_viec} · Mã: ${x.nv.nhanvien_ma}</div>
       </div>`;
     })}
-    ${section("🖼️ Nhân sự chưa có ảnh đại diện", "Đang làm việc nhưng chưa có photo_url", noPhotoItems, nv => {
+    ${section("🎁 Nghỉ việc quá hạn nhưng chưa trả quà tặng/đồng phục", `Đã nghỉ việc trên ${NV_RESIGN_GIFT_ALERT_DAYS} ngày, còn giữ ít nhất 1 món chưa trả`, resignGiftItems, x => {
+      const list = x.items.map(q => dmName[q.ma_qua_tang] || q.ma_qua_tang).join(", ");
+      return `<div class="sp-history-item" onclick="openQuaTangDetail('${escAttr(x.nv.nhanvien_ma)}')">
+        <div class="sp-history-top"><b>${x.nv.nhanvien_ten}</b><span class="tag clay">Nghỉ việc ${x.daysAgo} ngày</span></div>
+        <div class="muted" style="font-size:12.5px;">Chưa trả: ${list} · Ngày nghỉ: ${x.nv.ngay_nghi_viec}</div>
+      </div>`;
+    })}
+    ${section("🖼️ Nhân sự chưa có ảnh đại diện", `Đang làm việc nhưng chưa có ảnh · hiện ${noPhotoItems.length}/${noPhotoTotal}`, noPhotoItems, nv => {
       return `<div class="sp-history-item" onclick="openRecordPanel('nhan_vien','${escAttr(nv.nhanvien_ma)}')">
         <div class="sp-history-top"><b>${nv.nhanvien_ten}</b><span class="tag gray">Thiếu ảnh</span></div>
         <div class="muted" style="font-size:12.5px;">Mã: ${nv.nhanvien_ma}</div>
       </div>`;
-    })}
+    }, noPhotoMoreBtn)}
   </div>`;
   fadeInEl(wrap);
 }
@@ -3644,6 +3677,7 @@ async function openQuaTangDetail(nhanvienMa){
             </button>
           </span>
         </div>
+        <div style="margin-top:4px;">${q.ngay_tra ? `<span class="muted" style="font-size:12px;">Đã trả: ${q.ngay_tra}</span>` : '<span class="tag clay">Chưa trả</span>'}</div>
       </div>`).join("") : '<p class="muted">Chưa có quà tặng/đồng phục nào.</p>'}
   `;
   document.getElementById("spFoot").style.display = "none";
