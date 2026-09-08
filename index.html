@@ -1066,8 +1066,8 @@ function promptEditPassword(message){
 }
 
 /* ---------- tên người thao tác (ghi vào Nhật ký/audit log, Nhóm C.12) ---------- */
-function getActorName(){ return localStorage.getItem("hcns_actor_name") || ""; }
-function setActorName(n){ localStorage.setItem("hcns_actor_name", n || ""); }
+function getActorName(){ return sessionStorage.getItem("hcns_actor_name") || ""; }
+function setActorName(n){ sessionStorage.setItem("hcns_actor_name", n || ""); }
 
 /* ---------- helpers gọi API ---------- */
 /* Chỉ mục tìm kiếm dạng chuỗi (gộp mọi giá trị của 1 dòng, viết thường) được
@@ -1087,7 +1087,11 @@ function attachSearchIndex(rows){
   rows.forEach(r => { r._searchIndex = buildSearchIndex(r); });
   return rows;
 }
+const SENSITIVE_SHEETS = new Set(["nhan_vien", "nhat_ky", "bien_ban"]);
+function isSensitiveSheet(sheet){ return SENSITIVE_SHEETS.has(String(sheet || "")); }
+try{ SENSITIVE_SHEETS.forEach(sheet => localStorage.removeItem(LOCAL_CACHE_PREFIX + sheet)); }catch(e){}
 function loadLocalCache(sheet){
+  if(isSensitiveSheet(sheet)) return null; // Không lưu dữ liệu HR nhạy cảm trên máy người dùng.
   try{
     const raw = localStorage.getItem(LOCAL_CACHE_PREFIX + sheet);
     if(!raw) return null;
@@ -1096,6 +1100,7 @@ function loadLocalCache(sheet){
   }catch(e){ return null; }
 }
 function saveLocalCache(sheet, rows){
+  if(isSensitiveSheet(sheet)) return; // Sheet nhạy cảm chỉ giữ trong RAM.
   try{ localStorage.setItem(LOCAL_CACHE_PREFIX + sheet, JSON.stringify({ rows, ts: Date.now() })); }
   catch(e){ /* bỏ qua nếu vượt quota localStorage */ }
 }
@@ -1179,7 +1184,7 @@ async function apiFetchNextCode(sheet, fieldOverride){
    - Lỗi mật khẩu (authError) -> hỏi lại mật khẩu 1 lần rồi tự thử lại.
    - Lỗi LOGIC khác (trùng mã, dữ liệu không hợp lệ...) -> ném Error thường. */
 async function apiWriteRemote(action, sheet, payload, _isRetry){
-  const body = { action, sheet, editPassword: getEditPassword(), nguoi_thuc_hien: getActorName() };
+  const body = { action, sheet };
   if(payload && payload.id != null) body.id = payload.id;
   if(payload && payload.data != null) body.data = payload.data;
   const json = await apiPost(body);
@@ -1209,7 +1214,11 @@ let isSyncing = false;
 let syncRetryTimer = null;
 
 function loadSyncQueue(){
-  try{ return JSON.parse(localStorage.getItem(SYNC_QUEUE_KEY) || "[]"); }catch(e){ return []; }
+  try{
+    const q = JSON.parse(localStorage.getItem(SYNC_QUEUE_KEY) || "[]");
+    // Không khôi phục hàng đợi cũ có dữ liệu nhạy cảm từ localStorage.
+    return Array.isArray(q) ? q.filter(op => !isSensitiveSheet(op && op.sheet)) : [];
+  }catch(e){ return []; }
 }
 /* Nếu hàng đợi có nhiều thao tác giống HỆT nhau (cùng action, cùng sheet,
    cùng id, cùng dữ liệu data) — ví dụ do bấm Lưu nhiều lần liên tiếp, hoặc
@@ -1228,7 +1237,10 @@ function dedupSyncQueue(){
   syncQueue = result;
 }
 function persistSyncQueue(){
-  try{ localStorage.setItem(SYNC_QUEUE_KEY, JSON.stringify(syncQueue)); }catch(e){ /* ignore quota */ }
+  try{
+    const safeQueue = syncQueue.filter(op => !isSensitiveSheet(op.sheet)).map(op => ({...op, snapshot:null}));
+    localStorage.setItem(SYNC_QUEUE_KEY, JSON.stringify(safeQueue));
+  }catch(e){ /* ignore quota */ }
   renderSyncBadge();
 }
 function renderSyncBadge(){
@@ -1252,9 +1264,9 @@ function renderSyncBadge(){
    dữ liệu đang hiển thị (optimistic). sheet/id/data theo đúng định dạng gửi
    lên API. optimisticFn là hàm chỉnh sửa dataCache[sheet] tại chỗ. */
 function queueOperation(action, sheet, id, data, optimisticFn){
-  const snapshot = dataCache[sheet] ? JSON.parse(JSON.stringify(dataCache[sheet])) : null;
+  const snapshot = (!isSensitiveSheet(sheet) && dataCache[sheet]) ? JSON.parse(JSON.stringify(dataCache[sheet])) : null;
   if(optimisticFn) optimisticFn();
-  syncQueue.push({ opId: Date.now()+"_"+Math.random().toString(36).slice(2), action, sheet, id, data, snapshot });
+  syncQueue.push({ opId: Date.now()+"_"+Math.random().toString(36).slice(2), action, sheet, id, data, snapshot, volatile: isSensitiveSheet(sheet) });
   dedupSyncQueue();
   persistSyncQueue();
   processSyncQueue();
@@ -1323,7 +1335,7 @@ function toast(msg, isError, retryFn){
   el.innerHTML = (isError
     ? `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg>`
     : `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M4 12l5 5L20 6"/></svg>`
-  ) + `<span style="flex:1;">${msg}</span>`;
+  ) + `<span style="flex:1;">${escapeHtml(msg)}</span>`;
   if(retryFn){
     const retryBtn = document.createElement("button");
     retryBtn.textContent = "Thử lại";
@@ -1732,7 +1744,7 @@ function ttRowHtml(row, locked){
   const idx = ttRows.findIndex(r=>r.id===row.id)+1;
   return `<tr data-ttrow="${row.id}">
     <td class="bb-stt">${idx}</td>
-    <td><div class="bb-asset-name ${row.thuoc_tinh_ten?"":"empty"}" data-role="tt-name">${row.thuoc_tinh_ten || "Bấm để chọn thuộc tính"}</div></td>
+    <td><div class="bb-asset-name ${row.thuoc_tinh_ten?"":"empty"}" data-role="tt-name">${escapeHtml(row.thuoc_tinh_ten || "Bấm để chọn thuộc tính")}</div></td>
     <td><input type="text" data-role="tt-giatri" value="${escAttr(row.gia_tri||"")}" placeholder="Giá trị..." ${locked?"disabled":""}></td>
     <td>${locked ? "" : `<button class="bb-del-row" data-role="tt-del" title="Xoá dòng">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 6l12 12M18 6L6 18"/></svg>
@@ -2137,7 +2149,7 @@ async function renderTable(){
       const restFields = cfg.table.slice(1);
       const rowsInner = restFields.map(f=>{
         const val = cellValue(f, row);
-        return `<div class="rec-card-row"><span class="k">${L(f, currentSheet)}</span><span class="v">${val==null?'<span class="muted">—</span>':val}</span></div>`;
+        return `<div class="rec-card-row"><span class="k">${escapeHtml(L(f, currentSheet))}</span><span class="v">${val==null?'<span class="muted">—</span>':escapeHtml(val)}</span></div>`;
       }).join("");
       const checkbox = (canBulk) ? `<input type="checkbox" data-rowchk="${escAttr(id)}" ${selectedIds.has(id)?"checked":""} onclick="event.stopPropagation();">` : "";
       const clickAttr = isGrouped ? `onclick="openQuaTangDetail('${escAttr(row.nhanvien_ma)}')"` : `onclick="handleRowClick(event,'${escAttr(id)}')"`;
@@ -2209,6 +2221,22 @@ async function renderTable(){
   `;
 }
 function gotoPage(p){ page = p; renderTable(); }
+function escapeHtml(value){
+  return String(value ?? "")
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+    .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+}
+function safeUrl(value){
+  try{
+    const u = new URL(String(value || "").trim(), window.location.href);
+    return u.protocol === "https:" ? u.href : "";
+  }catch(e){ return ""; }
+}
+function safeExcelValue(value){
+  const s = String(value ?? "");
+  // Chặn công thức Excel; số âm dạng -123 vẫn giữ nguyên.
+  return /^(?:[=+@]|-(?!\d))/.test(s) ? "'" + s : s;
+}
 function escAttr(s){ return String(s).replace(/&/g,"&amp;").replace(/'/g,"&#39;").replace(/"/g,"&quot;"); }
 
 /* ---------- thanh thao tác hàng loạt (bulk): hiện khi có bản ghi đang được tick chọn ---------- */
@@ -2238,7 +2266,7 @@ async function bulkExportSelected(){
   const cfg = CONFIG[currentSheet];
   const rows = (dataCache[currentSheet]||[]).filter(r => selectedIds.has(idOf(r, cfg.pk)));
   if(!rows.length){ toast("Không có bản ghi phù hợp để xuất", true); return; }
-  const exportRows = await buildExportDataForSheet(currentSheet, rows);
+  const exportRows = (await buildExportDataForSheet(currentSheet, rows)).map(r => Object.fromEntries(Object.entries(r).map(([k,v]) => [k, safeExcelValue(v)])));
   const ws = XLSX.utils.json_to_sheet(exportRows);
   ws['!cols'] = excelAutoFitCols(exportRows);
   const wb = XLSX.utils.book_new();
@@ -2375,7 +2403,7 @@ async function exportListToExcel(){
       const wb = XLSX.utils.book_new();
       const addSheet = (rows, name) => {
         if(!rows || !rows.length) return;
-        const ws = XLSX.utils.json_to_sheet(rows);
+        const ws = XLSX.utils.json_to_sheet(rows.map(r => Object.fromEntries(Object.entries(r).map(([k,v]) => [k, safeExcelValue(v)]))));
         ws['!cols'] = excelAutoFitCols(rows);
         XLSX.utils.book_append_sheet(wb, ws, name.slice(0,31));
       };
@@ -2605,7 +2633,7 @@ function resizeImageForUpload(file, maxDim, quality){
 async function apiUploadImage(file, _isRetry){
   const resized = await resizeImageForUpload(file);
   const base64 = await fileToBase64(resized);
-  const json = await apiPost({ action:"uploadimage", filename: resized.name, mimeType: resized.type, base64, editPassword: getEditPassword() });
+  const json = await apiPost({ action:"uploadimage", filename: resized.name, mimeType: resized.type, base64 });
   if(!json.success){
     if(json.authError && !_isRetry){
       const entered = promptEditPassword(json.message);
@@ -3212,8 +3240,8 @@ async function toggleBienBanSavedList(){
     <h3 style="margin:0 0 10px;font-size:14.5px;color:var(--forest-deep);">Biên bản đã lưu (${rows.length})</h3>
     ${rows.length ? rows.map(r=>`
       <div class="sp-history-item" onclick="loadBienBanIntoForm('${escAttr(r.bienban_ma)}')">
-        <div class="sp-history-top"><b>${r.bienban_ma}${r.so_bb?(" · Số "+r.so_bb):""}</b><span class="muted">${r.ngay_lap||"—"}</span></div>
-        <div class="muted" style="font-size:12.5px;">${r.ben_giao||"—"} → ${r.ben_nhan||"—"}</div>
+        <div class="sp-history-top"><b>${escapeHtml(r.bienban_ma)}${r.so_bb?(" · Số "+escapeHtml(r.so_bb)):""}</b><span class="muted">${escapeHtml(r.ngay_lap||"—")}</span></div>
+        <div class="muted" style="font-size:12.5px;">${escapeHtml(r.ben_giao||"—")} → ${escapeHtml(r.ben_nhan||"—")}</div>
       </div>`).join("") : '<p class="muted">Chưa có biên bản nào được lưu.</p>'}
   </div>`;
 }
@@ -3255,7 +3283,7 @@ function getBbRow(id){ return bbRows.find(r=>r.id===id); }
 function bbRowHtml(row){
   return `<tr data-row="${row.id}">
     <td class="bb-stt">${bbRows.findIndex(r=>r.id===row.id)+1}</td>
-    <td><div class="bb-asset-name ${row.ten?"":"empty"}" data-role="name">${row.ten || "Bấm vào đây để chọn tên tài sản"}</div></td>
+    <td><div class="bb-asset-name ${row.ten?"":"empty"}" data-role="name">${escapeHtml(row.ten || "Bấm vào đây để chọn tên tài sản")}</div></td>
     <td class="bb-col-dvt"><input type="text" data-role="dvt" value="${escAttr(row.dvt)}"></td>
     <td class="bb-col-sl"><input type="number" min="0" data-role="sl" value="${row.sl}"></td>
     <td><input type="text" data-role="ghichu" value="${escAttr(row.ghichu)}" placeholder="Ghi chú..."></td>
@@ -3418,10 +3446,10 @@ async function renderHoaDon(){
     const ten = cc ? computeCongCuTen(cc, specRows) : h.cong_cu_ma;
     const nguoiSua = h.nhan_vien_ten || h.nhan_vien_ma || "—";
     return `<tr class="clickable-row" title="Bấm để xem chi tiết công cụ" onclick="openDetail('${escAttr(h.cong_cu_ma)}')">
-      <td>${ten}</td>
-      <td>${nguoiSua}</td>
-      <td>${h.ngay_sua || "—"}</td>
-      <td><span class="tag honey">${h.trang_thai || "—"}</span></td>
+      <td>${escapeHtml(ten)}</td>
+      <td>${escapeHtml(nguoiSua)}</td>
+      <td>${escapeHtml(h.ngay_sua || "—")}</td>
+      <td><span class="tag honey">${escapeHtml(h.trang_thai || "—")}</span></td>
       <td class="col-actions"><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();openInvoiceImage('${escAttr(h.hoadon_url)}')">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2h12v19l-2.5-1.5L13 21l-2.5-1.5L8 21l-2-1.5z"/></svg>
         Xem hoá đơn
@@ -3437,7 +3465,7 @@ async function renderHoaDon(){
   fadeInEl(wrap);
 }
 
-function isHttpUrl(u){ return /^https?:\/\//i.test(String(u||"").trim()); }
+function isHttpUrl(u){ return !!safeUrl(u); }
 
 function openInvoiceImage(url){
   const body = document.getElementById("invoiceOverlayBody");
@@ -3453,9 +3481,11 @@ function openInvoiceImage(url){
     document.getElementById("invoiceOverlay").classList.add("show");
     return;
   }
-  const direct = driveDirectLink(url);
+  const safe = safeUrl(url);
+  if(!safe){ body.innerHTML = `<div class="empty-state"><div class="lead">Đường dẫn hoá đơn không hợp lệ</div></div>`; pushOverlay("invoiceOverlay"); document.getElementById("invoiceOverlay").classList.add("show"); return; }
+  const direct = driveDirectLink(safe);
   const link = document.createElement("a");
-  link.href = url; link.target = "_blank";
+  link.href = safe; link.target = "_blank"; link.rel = "noopener noreferrer";
   const img = document.createElement("img");
   img.src = direct;
   img.alt = "Hoá đơn";
@@ -3464,7 +3494,7 @@ function openInvoiceImage(url){
     img.remove();
     const fallback = document.createElement("div");
     fallback.className = "empty-state";
-    fallback.innerHTML = `<div class="lead">Không xem trước được ảnh</div><a href="${url}" target="_blank">Mở hoá đơn trong tab mới</a>`;
+    fallback.innerHTML = `<div class="lead">Không xem trước được ảnh</div><a href="${escapeHtml(safe)}" target="_blank" rel="noopener noreferrer">Mở hoá đơn trong tab mới</a>`;
     body.appendChild(fallback);
   };
   link.appendChild(img);
@@ -3995,7 +4025,7 @@ async function renderSpHistory(){
     ${history.length ? history.map(h => `
       <div class="sp-history-item" onclick="openSpHistoryForm('${escAttr(h.lich_su_ma)}')">
         <div class="sp-history-top">
-          <b>${h.ngay_sua || "—"}</b>
+          <b>${escapeHtml(h.ngay_sua || "—")}</b>
           <span style="display:flex;align-items:center;gap:6px;">
             <span class="tag honey">${h.trang_thai || "—"}</span>
             ${h.hoadon_url ? `<button class="icon-btn" title="Xem hoá đơn" onclick="event.stopPropagation();openInvoiceImage('${escAttr(h.hoadon_url)}')">
@@ -4003,7 +4033,7 @@ async function renderSpHistory(){
             </button>` : ""}
           </span>
         </div>
-        <div class="muted" style="font-size:12.5px;">${h.ly_do_sua || "—"}${h.chi_phi_sua ? " · " + formatNumber(h.chi_phi_sua) + " đ" : ""}</div>
+        <div class="muted" style="font-size:12.5px;">${escapeHtml(h.ly_do_sua || "—")}${h.chi_phi_sua ? " · " + formatNumber(h.chi_phi_sua) + " đ" : ""}</div>
       </div>`).join("") : '<p class="muted">Chưa có lịch sử công cụ.</p>'}
   `;
   document.getElementById("spFoot").style.display = "none";
@@ -4141,7 +4171,7 @@ async function openDetail(id){
 
     <h3 class="serif" style="font-size:15px;margin:18px 0 8px;color:var(--forest-deep);">Lịch sử công cụ</h3>
     ${history.length? `<table class="mini-table"><thead><tr><th>Ngày</th><th>Lý do</th><th>Nội dung sửa</th><th>Chi phí</th><th>Trạng thái sửa chữa</th><th>Hoá đơn</th></tr></thead>
-      <tbody>${history.map(h=>`<tr><td>${h.ngay_sua||"—"}</td><td>${h.ly_do_sua||"—"}</td><td>${h.noi_dung_sua||"—"}</td><td>${h.chi_phi_sua?formatNumber(h.chi_phi_sua):"—"}</td><td><span class="tag honey">${h.trang_thai||"—"}</span></td><td>${h.hoadon_url?`<a href="${h.hoadon_url}" target="_blank">Xem</a>`:"—"}</td></tr>`).join("")}</tbody></table>`
+      <tbody>${history.map(h=>`<tr><td>${escapeHtml(h.ngay_sua||"—")}</td><td>${escapeHtml(h.ly_do_sua||"—")}</td><td>${escapeHtml(h.noi_dung_sua||"—")}</td><td>${h.chi_phi_sua?formatNumber(h.chi_phi_sua):"—"}</td><td><span class="tag honey">${escapeHtml(h.trang_thai||"—")}</span></td><td>${h.hoadon_url?`<a href="${escapeHtml(safeUrl(h.hoadon_url))}" target="_blank" rel="noopener noreferrer">Xem</a>`:"—"}</td></tr>`).join("")}</tbody></table>`
       : `<p class="muted" style="font-size:12.8px;">Chưa có lịch sử công cụ.</p>`}
   `;
   pushOverlay("detailOverlay");
