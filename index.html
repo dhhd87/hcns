@@ -715,6 +715,8 @@
 // Phiên bản mới, KHÔNG tạo deployment mới), link /exec này giữ nguyên nên
 // không cần sửa gì thêm.
 const API_URL = "https://script.google.com/macros/s/AKfycbwbEwsDTde3aKAXPHibxflMBzBJANp_L2m3tKGtSWJnYRXedtjmI5hjPpOV2OcRRkxJYQ/exec";
+// BẢO MẬT: chống Formula/CSV Injection khi xuất Excel — xem sanitizeExcelCell()/
+// sanitizeRowsForExcel() phía dưới, áp dụng cho mọi điểm gọi XLSX.utils.json_to_sheet().
 
 /* ---------- nhãn tiếng Việt cho tên cột (dùng chung cho mọi sheet) ---------- */
 const LABELS = {
@@ -1115,7 +1117,7 @@ async function refreshSheetInBackground(sheet){
   if(backgroundRefreshing.has(sheet)) return;
   backgroundRefreshing.add(sheet);
   try{
-    const json = await apiGet("list", { sheet });
+    const json = await apiGet("list", { sheet, editPassword: getEditPassword() });
     if(json.success){
       dataCache[sheet] = attachSearchIndex(json.data);
       saveLocalCache(sheet, json.data);
@@ -1137,11 +1139,24 @@ async function apiList(sheet){
     refreshSheetInBackground(sheet);
     return dataCache[sheet];
   }
-  const json = await apiGet("list", { sheet });
-  if(!json.success) throw new Error(json.message || "Lỗi tải dữ liệu");
+  const json = await apiListRemote(sheet);
   dataCache[sheet] = attachSearchIndex(json.data);
   saveLocalCache(sheet, json.data);
   return dataCache[sheet];
+}
+/* Sheet chứa PII (vd nhan_vien) đòi hỏi đúng mật khẩu chỉnh sửa mới đọc được
+   (list) — nếu server từ chối (authError), hỏi lại mật khẩu 1 lần rồi tự thử
+   lại, giống hệt pattern dùng cho apiWriteRemote. */
+async function apiListRemote(sheet, _isRetry){
+  const json = await apiGet("list", { sheet, editPassword: getEditPassword() });
+  if(!json.success){
+    if(json.authError && !_isRetry){
+      const entered = promptEditPassword(json.message);
+      if(entered) return apiListRemote(sheet, true);
+    }
+    throw new Error(json.message || "Lỗi tải dữ liệu");
+  }
+  return json;
 }
 /* Sinh mã kế tiếp HOÀN TOÀN Ở PHÍA TRÌNH DUYỆT, không gọi server (action=nextcode
    trước đây phải chờ round-trip mạng mỗi lần bấm "Thêm mới"). Vì mọi màn hình đều
@@ -1662,7 +1677,7 @@ function buildFilterBarHtml(cfg, relMaps, extraOptions){
     const cur = quickFilters[f] || "";
     return `<select data-qf="${f}">
       <option value="">${L(f, currentSheet)} — Tất cả</option>
-      ${opts.map(o=>`<option value="${escAttr(o.value)}" ${String(o.value)===String(cur)?"selected":""}>${o.text}</option>`).join("")}
+      ${opts.map(o=>`<option value="${escAttr(o.value)}" ${String(o.value)===String(cur)?"selected":""}>${escHtml(o.text)}</option>`).join("")}
     </select>`;
   }).join("");
   return controls ? `<div class="filter-bar">${controls}</div>` : "";
@@ -1732,7 +1747,7 @@ function ttRowHtml(row, locked){
   const idx = ttRows.findIndex(r=>r.id===row.id)+1;
   return `<tr data-ttrow="${row.id}">
     <td class="bb-stt">${idx}</td>
-    <td><div class="bb-asset-name ${row.thuoc_tinh_ten?"":"empty"}" data-role="tt-name">${row.thuoc_tinh_ten || "Bấm để chọn thuộc tính"}</div></td>
+    <td><div class="bb-asset-name ${row.thuoc_tinh_ten?"":"empty"}" data-role="tt-name">${escHtml(row.thuoc_tinh_ten) || "Bấm để chọn thuộc tính"}</div></td>
     <td><input type="text" data-role="tt-giatri" value="${escAttr(row.gia_tri||"")}" placeholder="Giá trị..." ${locked?"disabled":""}></td>
     <td>${locked ? "" : `<button class="bb-del-row" data-role="tt-del" title="Xoá dòng">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 6l12 12M18 6L6 18"/></svg>
@@ -2062,21 +2077,25 @@ async function renderTable(){
     let val;
     if(f === "phongban_ten" && ccPhongBanByNV){
       val = ccPhongBanByNV[row.nhanvien_ma] || null;
+      return (val==null || val==="") ? null : escHtml(val);
     }else if(f === "cong_cu_ten" && ccTenMap){
       val = ccTenMap[row.cong_cu_ma] || null;
+      return (val==null || val==="") ? null : escHtml(val);
     }else if(f === "danh_muc_cha_ten" && dmChaTenMap){
       val = dmChaTenMap[row.danh_muc_cha] || dmChaTenMap[String(row.danh_muc_cha||"").trim()] || dmChaTenMap[normalizeCodeKey(row.danh_muc_cha)] || null;
+      return (val==null || val==="") ? null : escHtml(val);
     }else if(f === "danh_muc_ma_ten" && dmTenMap){
       val = dmTenMap[row.danh_muc_ma] || null;
+      return (val==null || val==="") ? null : escHtml(val);
     }else if(f === "so_luong_nhan_su" && pbSoLuongNsMap){
       const n = pbSoLuongNsMap[row.phongban_ma] || 0;
-      val = `<span class="tag">${n} người</span>`;
+      return `<span class="tag">${n} người</span>`; // số nguyên tính toán, không phải dữ liệu người dùng nhập
     }else{
       val = row[f];
       if(NUMBER_FIELDS.has(f)) val = formatNumber(val);
-      if(relMaps[f] && val!=null && relMaps[f][val]) val = `${relMaps[f][val]} <span class="muted">(${row[f]})</span>`;
+      if(relMaps[f] && val!=null && relMaps[f][val]) return `${escHtml(relMaps[f][val])} <span class="muted">(${escHtml(row[f])})</span>`;
+      return (val==null || val==="") ? null : escHtml(val);
     }
-    return (val==null || val==="") ? null : val;
   }
 
   const curSort = sortState[currentSheet];
@@ -2210,6 +2229,13 @@ async function renderTable(){
 }
 function gotoPage(p){ page = p; renderTable(); }
 function escAttr(s){ return String(s).replace(/&/g,"&amp;").replace(/'/g,"&#39;").replace(/"/g,"&quot;"); }
+/* Escape dữ liệu trước khi chèn vào innerHTML (chống XSS lưu trữ qua các trường
+   text tự do như ghi_chu, ly_do_sua, noi_dung_sua...). Dùng cho MỌI giá trị dữ
+   liệu (không phải markup do chính app tạo ra) trước khi nhét vào chuỗi HTML. */
+function escHtml(s){
+  if(s==null) return "";
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+}
 
 /* ---------- thanh thao tác hàng loạt (bulk): hiện khi có bản ghi đang được tick chọn ---------- */
 function renderBulkBar(){
@@ -2239,8 +2265,9 @@ async function bulkExportSelected(){
   const rows = (dataCache[currentSheet]||[]).filter(r => selectedIds.has(idOf(r, cfg.pk)));
   if(!rows.length){ toast("Không có bản ghi phù hợp để xuất", true); return; }
   const exportRows = await buildExportDataForSheet(currentSheet, rows);
-  const ws = XLSX.utils.json_to_sheet(exportRows);
-  ws['!cols'] = excelAutoFitCols(exportRows);
+  const safeRows = sanitizeRowsForExcel(exportRows);
+  const ws = XLSX.utils.json_to_sheet(safeRows);
+  ws['!cols'] = excelAutoFitCols(safeRows);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, String(cfg.label).slice(0,31));
   const stamp = new Date().toISOString().slice(0,19).replace(/[:T]/g,"-");
@@ -2338,6 +2365,25 @@ async function buildExportDataForSheet(sheet, rowsInput){
   });
 }
 
+/* ================= CHỐNG FORMULA/CSV INJECTION KHI XUẤT EXCEL (Mục 4 bao-mat) =================
+   Nếu 1 ô bắt đầu bằng =, +, -, @ thì Excel/LibreOffice có thể hiểu đó là công thức
+   (vd "=CMD|'/c calc'!A1" hay "=HYPERLINK(...)") và thực thi khi người khác mở file —
+   dữ liệu này vốn do người dùng tự nhập (ghi_chu, tên...) nên không được tin tưởng.
+   Thêm tiền tố dấu nháy đơn (') để Excel luôn hiểu là văn bản thường, không thực thi. */
+function sanitizeExcelCell(v){
+  if(v==null) return v;
+  if(typeof v === "number" || typeof v === "boolean") return v;
+  const s = String(v);
+  return /^[=+\-@]/.test(s) ? ("'" + s) : v;
+}
+function sanitizeRowsForExcel(rows){
+  return (rows||[]).map(r=>{
+    const o = {};
+    Object.keys(r).forEach(k=>{ o[k] = sanitizeExcelCell(r[k]); });
+    return o;
+  });
+}
+
 /* Tự tính độ rộng cột Excel theo nội dung dài nhất trong từng cột (kể cả tiêu đề),
    để khi mở file không phải tự kéo giãn từng cột. Giới hạn tối thiểu/tối đa để
    tránh cột quá hẹp (số ngắn) hoặc quá rộng (ghi chú dài). */
@@ -2375,8 +2421,9 @@ async function exportListToExcel(){
       const wb = XLSX.utils.book_new();
       const addSheet = (rows, name) => {
         if(!rows || !rows.length) return;
-        const ws = XLSX.utils.json_to_sheet(rows);
-        ws['!cols'] = excelAutoFitCols(rows);
+        const safeRows = sanitizeRowsForExcel(rows);
+        const ws = XLSX.utils.json_to_sheet(safeRows);
+        ws['!cols'] = excelAutoFitCols(safeRows);
         XLSX.utils.book_append_sheet(wb, ws, name.slice(0,31));
       };
       addSheet(overviewExportData.kpis.map(k=>({ "Chỉ số": k.label, "Giá trị": k.value })), "Chỉ số tổng quan");
@@ -2401,8 +2448,9 @@ async function exportListToExcel(){
       exportRows = await buildExportDataForSheet(sheet, source);
     }
     if(!exportRows.length){ toast("Không có dữ liệu để xuất", true); return; }
-    const ws = XLSX.utils.json_to_sheet(exportRows);
-    ws['!cols'] = excelAutoFitCols(exportRows);
+    const safeExportRows = sanitizeRowsForExcel(exportRows);
+    const ws = XLSX.utils.json_to_sheet(safeExportRows);
+    ws['!cols'] = excelAutoFitCols(safeExportRows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, String(cfg.label).slice(0,31));
     XLSX.writeFile(wb, `${sheet}_${stamp}.xlsx`);
@@ -2734,7 +2782,7 @@ async function openForm(id){
           <span class="field-hint-dbl">Nháy đúp vào ô để chọn từ danh sách</span></div>`;
       }
       if(LONGTEXT_FIELDS.has(f)){
-        return `<div class="field full"><label>${L(f, currentSheet)}</label><textarea data-field="${f}">${val}</textarea></div>`;
+        return `<div class="field full"><label>${L(f, currentSheet)}</label><textarea data-field="${f}">${escHtml(val)}</textarea></div>`;
       }
       if(URL_FIELDS.has(f)){
         return imageFieldBlockHtml("data-field", f, currentSheet, val, false);
@@ -3212,8 +3260,8 @@ async function toggleBienBanSavedList(){
     <h3 style="margin:0 0 10px;font-size:14.5px;color:var(--forest-deep);">Biên bản đã lưu (${rows.length})</h3>
     ${rows.length ? rows.map(r=>`
       <div class="sp-history-item" onclick="loadBienBanIntoForm('${escAttr(r.bienban_ma)}')">
-        <div class="sp-history-top"><b>${r.bienban_ma}${r.so_bb?(" · Số "+r.so_bb):""}</b><span class="muted">${r.ngay_lap||"—"}</span></div>
-        <div class="muted" style="font-size:12.5px;">${r.ben_giao||"—"} → ${r.ben_nhan||"—"}</div>
+        <div class="sp-history-top"><b>${escHtml(r.bienban_ma)}${r.so_bb?(" · Số "+escHtml(r.so_bb)):""}</b><span class="muted">${escHtml(r.ngay_lap||"—")}</span></div>
+        <div class="muted" style="font-size:12.5px;">${escHtml(r.ben_giao||"—")} → ${escHtml(r.ben_nhan||"—")}</div>
       </div>`).join("") : '<p class="muted">Chưa có biên bản nào được lưu.</p>'}
   </div>`;
 }
@@ -3255,7 +3303,7 @@ function getBbRow(id){ return bbRows.find(r=>r.id===id); }
 function bbRowHtml(row){
   return `<tr data-row="${row.id}">
     <td class="bb-stt">${bbRows.findIndex(r=>r.id===row.id)+1}</td>
-    <td><div class="bb-asset-name ${row.ten?"":"empty"}" data-role="name">${row.ten || "Bấm vào đây để chọn tên tài sản"}</div></td>
+    <td><div class="bb-asset-name ${row.ten?"":"empty"}" data-role="name">${escHtml(row.ten) || "Bấm vào đây để chọn tên tài sản"}</div></td>
     <td class="bb-col-dvt"><input type="text" data-role="dvt" value="${escAttr(row.dvt)}"></td>
     <td class="bb-col-sl"><input type="number" min="0" data-role="sl" value="${row.sl}"></td>
     <td><input type="text" data-role="ghichu" value="${escAttr(row.ghichu)}" placeholder="Ghi chú..."></td>
@@ -3312,8 +3360,8 @@ async function openAssetPicker(rowId){
     listEl.innerHTML = list.map(({cc,ten})=>{
       const nv = nvMap[cc.nhanvien_ma];
       return `<div class="asset-pick-item" data-cc="${escAttr(cc.cong_cu_ma)}">
-        <b>${ten}</b> <span class="muted">(${cc.cong_cu_ma})</span>
-        <div class="muted" style="font-size:12px;margin-top:2px;">${nv?nv.nhanvien_ten:"Chưa bàn giao"}${nv?(" · "+(pbName[nv.phongban_ma]||"—")):""}</div>
+        <b>${escHtml(ten)}</b> <span class="muted">(${escHtml(cc.cong_cu_ma)})</span>
+        <div class="muted" style="font-size:12px;margin-top:2px;">${escHtml(nv?nv.nhanvien_ten:"Chưa bàn giao")}${nv?(" · "+escHtml(pbName[nv.phongban_ma]||"—")):""}</div>
       </div>`;
     }).join("");
     listEl.querySelectorAll(".asset-pick-item").forEach(el=>{
@@ -3418,10 +3466,10 @@ async function renderHoaDon(){
     const ten = cc ? computeCongCuTen(cc, specRows) : h.cong_cu_ma;
     const nguoiSua = h.nhan_vien_ten || h.nhan_vien_ma || "—";
     return `<tr class="clickable-row" title="Bấm để xem chi tiết công cụ" onclick="openDetail('${escAttr(h.cong_cu_ma)}')">
-      <td>${ten}</td>
-      <td>${nguoiSua}</td>
-      <td>${h.ngay_sua || "—"}</td>
-      <td><span class="tag honey">${h.trang_thai || "—"}</span></td>
+      <td>${escHtml(ten)}</td>
+      <td>${escHtml(nguoiSua)}</td>
+      <td>${escHtml(h.ngay_sua || "—")}</td>
+      <td><span class="tag honey">${escHtml(h.trang_thai || "—")}</span></td>
       <td class="col-actions"><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();openInvoiceImage('${escAttr(h.hoadon_url)}')">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2h12v19l-2.5-1.5L13 21l-2.5-1.5L8 21l-2-1.5z"/></svg>
         Xem hoá đơn
@@ -3559,28 +3607,28 @@ async function renderReminders(){
       const ten = cc ? (cc.cong_cu_ten || cc.cong_cu_ma) : x.h.cong_cu_ma;
       const label = x.days===0 ? "Hết hạn hôm nay" : `Còn ${x.days} ngày`;
       return `<div class="sp-history-item" onclick="openDetail('${escAttr(x.h.cong_cu_ma)}')">
-        <div class="sp-history-top"><b>${ten}</b><span class="tag ${x.days<=3?'clay':'honey'}">${label}</span></div>
-        <div class="muted" style="font-size:12.5px;">Hạn bảo hành: ${x.h.han_bao_hanh} · Mã công cụ: ${x.h.cong_cu_ma}</div>
+        <div class="sp-history-top"><b>${escHtml(ten)}</b><span class="tag ${x.days<=3?'clay':'honey'}">${label}</span></div>
+        <div class="muted" style="font-size:12.5px;">Hạn bảo hành: ${escHtml(x.h.han_bao_hanh)} · Mã công cụ: ${escHtml(x.h.cong_cu_ma)}</div>
       </div>`;
     })}
     ${section("🧑‍💼 Nhân sự sắp/đã hết hạn thử việc", `Thử việc ${NV_PROBATION_DAYS} ngày, cảnh báo trước ${NV_PROBATION_ALERT_DAYS} ngày`, probationItems, x => {
       const label = x.days < 0 ? `Quá hạn ${-x.days} ngày` : (x.days===0 ? "Hết hạn hôm nay" : `Còn ${x.days} ngày`);
       return `<div class="sp-history-item" onclick="openRecordPanel('nhan_vien','${escAttr(x.nv.nhanvien_ma)}')">
-        <div class="sp-history-top"><b>${x.nv.nhanvien_ten}</b><span class="tag ${x.days<0?'clay':'honey'}">${label}</span></div>
-        <div class="muted" style="font-size:12.5px;">Bắt đầu thử việc: ${x.nv.ngay_thu_viec} · Mã: ${x.nv.nhanvien_ma}</div>
+        <div class="sp-history-top"><b>${escHtml(x.nv.nhanvien_ten)}</b><span class="tag ${x.days<0?'clay':'honey'}">${label}</span></div>
+        <div class="muted" style="font-size:12.5px;">Bắt đầu thử việc: ${escHtml(x.nv.ngay_thu_viec)} · Mã: ${escHtml(x.nv.nhanvien_ma)}</div>
       </div>`;
     })}
     ${section("🎁 Nghỉ việc quá hạn nhưng chưa trả quà tặng/đồng phục", `Đã nghỉ việc trên ${NV_RESIGN_GIFT_ALERT_DAYS} ngày, còn giữ ít nhất 1 món chưa trả`, resignGiftItems, x => {
-      const list = x.items.map(q => dmName[q.ma_qua_tang] || q.ma_qua_tang).join(", ");
+      const list = escHtml(x.items.map(q => dmName[q.ma_qua_tang] || q.ma_qua_tang).join(", "));
       return `<div class="sp-history-item" onclick="openQuaTangDetail('${escAttr(x.nv.nhanvien_ma)}')">
-        <div class="sp-history-top"><b>${x.nv.nhanvien_ten}</b><span class="tag clay">Nghỉ việc ${x.daysAgo} ngày</span></div>
-        <div class="muted" style="font-size:12.5px;">Chưa trả: ${list} · Ngày nghỉ: ${x.nv.ngay_nghi_viec}</div>
+        <div class="sp-history-top"><b>${escHtml(x.nv.nhanvien_ten)}</b><span class="tag clay">Nghỉ việc ${x.daysAgo} ngày</span></div>
+        <div class="muted" style="font-size:12.5px;">Chưa trả: ${list} · Ngày nghỉ: ${escHtml(x.nv.ngay_nghi_viec)}</div>
       </div>`;
     })}
     ${section("🖼️ Nhân sự chưa có ảnh đại diện", `Đang làm việc nhưng chưa có ảnh · hiện ${noPhotoItems.length}/${noPhotoTotal}`, noPhotoItems, nv => {
       return `<div class="sp-history-item" onclick="openRecordPanel('nhan_vien','${escAttr(nv.nhanvien_ma)}')">
-        <div class="sp-history-top"><b>${nv.nhanvien_ten}</b><span class="tag gray">Thiếu ảnh</span></div>
-        <div class="muted" style="font-size:12.5px;">Mã: ${nv.nhanvien_ma}</div>
+        <div class="sp-history-top"><b>${escHtml(nv.nhanvien_ten)}</b><span class="tag gray">Thiếu ảnh</span></div>
+        <div class="muted" style="font-size:12.5px;">Mã: ${escHtml(nv.nhanvien_ma)}</div>
       </div>`;
     }, noPhotoMoreBtn)}
   </div>`;
@@ -3615,10 +3663,10 @@ function renderRelPickList(q){
   if(!filteredList.length){ listEl.innerHTML = `<p class="muted">Không tìm thấy kết quả phù hợp.</p>`; return; }
   listEl.innerHTML = filteredList.map(r=>{
     const extraHtml = detailFields.length ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 14px;margin-top:6px;">
-      ${detailFields.map(d=>`<div class="muted" style="font-size:11.5px;">${d.label}: ${r[d.field] ?? "—"}</div>`).join("")}
+      ${detailFields.map(d=>`<div class="muted" style="font-size:11.5px;">${escHtml(d.label)}: ${escHtml(r[d.field] ?? "—")}</div>`).join("")}
     </div>` : "";
     return `<div class="asset-pick-item" data-val="${escAttr(r[relCfg.value])}">
-      <b>${r[relCfg.text] ?? "—"}</b> <span class="muted">(${r[relCfg.value]})</span>
+      <b>${escHtml(r[relCfg.text] ?? "—")}</b> <span class="muted">(${escHtml(r[relCfg.value])})</span>
       ${extraHtml}
     </div>`;
   }).join("");
@@ -3703,7 +3751,7 @@ async function openQuaTangDetail(nhanvienMa){
 
   document.getElementById("spBody").innerHTML = `
     <div class="info-card" style="margin-bottom:16px;">
-      <div><span class="k">Phòng ban</span><span class="v">${pb?pb.phongban_ten:"—"}</span></div>
+      <div><span class="k">Phòng ban</span><span class="v">${escHtml(pb?pb.phongban_ten:"—")}</span></div>
       <div><span class="k">Tổng số lượt đã nhận</span><span class="v">${items.length}</span></div>
     </div>
     <div style="display:flex;justify-content:flex-end;margin-bottom:10px;">
@@ -3715,9 +3763,9 @@ async function openQuaTangDetail(nhanvienMa){
     ${items.length ? items.map(q=>`
       <div class="sp-history-item">
         <div class="sp-history-top">
-          <b>${dmName[q.ma_qua_tang] || q.ma_qua_tang}</b>
+          <b>${escHtml(dmName[q.ma_qua_tang] || q.ma_qua_tang)}</b>
           <span style="display:flex;align-items:center;gap:6px;">
-            <span class="muted" style="font-size:12.5px;">${q.ngay_phat||"—"}</span>
+            <span class="muted" style="font-size:12.5px;">${escHtml(q.ngay_phat||"—")}</span>
             <button class="icon-btn" title="Sửa" onclick="event.stopPropagation();openQuaTangEditForm('${escAttr(nhanvienMa)}','${escAttr(q.ma_qua_tang)}')">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
             </button>
@@ -3726,7 +3774,7 @@ async function openQuaTangDetail(nhanvienMa){
             </button>
           </span>
         </div>
-        <div style="margin-top:4px;">${q.ngay_tra ? `<span class="muted" style="font-size:12px;">Đã trả: ${q.ngay_tra}</span>` : '<span class="tag clay">Chưa trả</span>'}</div>
+        <div style="margin-top:4px;">${q.ngay_tra ? `<span class="muted" style="font-size:12px;">Đã trả: ${escHtml(q.ngay_tra)}</span>` : '<span class="tag clay">Chưa trả</span>'}</div>
       </div>`).join("") : '<p class="muted">Chưa có quà tặng/đồng phục nào.</p>'}
   `;
   document.getElementById("spFoot").style.display = "none";
@@ -3857,7 +3905,7 @@ function spFieldView(f, val, sheet, relMaps){
   }
   if(display!=null && NUMBER_FIELDS.has(f)) display = formatNumber(display);
   if(display!=null && !autoInfo && relMaps && relMaps[f] && relMaps[f][val]) display = `${relMaps[f][val]} (${val})`;
-  return `<div class="sp-field"><span class="k">${L(f, sheet)}</span><span class="v">${display!=null ? display : "—"}</span></div>`;
+  return `<div class="sp-field"><span class="k">${L(f, sheet)}</span><span class="v">${display!=null ? escHtml(display) : "—"}</span></div>`;
 }
 function spFieldEdit(f, val, isPk, sheet){
   const cfg = CONFIG[sheet];
@@ -3885,7 +3933,7 @@ function spFieldEdit(f, val, isPk, sheet){
       <span class="field-hint-dbl">Nháy đúp vào ô để chọn từ danh sách</span></div>`;
   }
   if(isPk) return `<div class="field"><label>${L(f, sheet)} <span class="field-hint">(khoá chính)</span></label><input type="text" value="${escAttr(val ?? "")}" readonly></div>`;
-  if(LONGTEXT_FIELDS.has(f)) return `<div class="field full"><label>${L(f, sheet)}</label><textarea data-spfield="${f}">${val ?? ""}</textarea></div>`;
+  if(LONGTEXT_FIELDS.has(f)) return `<div class="field full"><label>${L(f, sheet)}</label><textarea data-spfield="${f}">${escHtml(val)}</textarea></div>`;
   if(URL_FIELDS.has(f)) return imageFieldBlockHtml("data-spfield", f, sheet, val, false);
   if(DATE_FIELDS_HINT(f)) return `<div class="field"><label>${L(f, sheet)}</label><input type="date" data-spfield="${f}" data-datefield="1" value="${vnToIso(val)}"></div>`;
   return `<div class="field"><label>${L(f, sheet)}</label><input type="text" data-spfield="${f}" value="${escAttr(val ?? "")}"></div>`;
@@ -3907,11 +3955,11 @@ async function renderSpInfo(){
     const dm = dmRows.find(d => normalizeCodeKey(d.danh_muc_ma) === normalizeCodeKey(record.danh_muc_ma));
     extraCardHtml = `
       <div class="info-card" style="margin-bottom:18px;">
-        <div><span class="k">Tên công cụ (tổng hợp)</span><span class="v">${tenCongCu || "—"}</span></div>
-        <div><span class="k">Danh mục thiết bị</span><span class="v">${dm ? dm.danh_muc_ten : (record.danh_muc_ma || "—")}</span></div>
-        <div><span class="k">Phòng ban</span><span class="v">${pb ? pb.phongban_ten : "—"}</span></div>
-        <div><span class="k">Người đang giữ</span><span class="v">${nv ? nv.nhanvien_ten : "—"}${record.nhanvien_ma ? " ("+record.nhanvien_ma+")" : ""}</span></div>
-        <div><span class="k">Khu vực</span><span class="v">${record.khu_vuc || "—"}</span></div>
+        <div><span class="k">Tên công cụ (tổng hợp)</span><span class="v">${escHtml(tenCongCu || "—")}</span></div>
+        <div><span class="k">Danh mục thiết bị</span><span class="v">${escHtml(dm ? dm.danh_muc_ten : (record.danh_muc_ma || "—"))}</span></div>
+        <div><span class="k">Phòng ban</span><span class="v">${escHtml(pb ? pb.phongban_ten : "—")}</span></div>
+        <div><span class="k">Người đang giữ</span><span class="v">${escHtml(nv ? nv.nhanvien_ten : "—")}${record.nhanvien_ma ? " ("+escHtml(record.nhanvien_ma)+")" : ""}</span></div>
+        <div><span class="k">Khu vực</span><span class="v">${escHtml(record.khu_vuc || "—")}</span></div>
       </div>`;
   }
   if(spState.sheet === "phong_ban"){
@@ -3995,15 +4043,15 @@ async function renderSpHistory(){
     ${history.length ? history.map(h => `
       <div class="sp-history-item" onclick="openSpHistoryForm('${escAttr(h.lich_su_ma)}')">
         <div class="sp-history-top">
-          <b>${h.ngay_sua || "—"}</b>
+          <b>${escHtml(h.ngay_sua || "—")}</b>
           <span style="display:flex;align-items:center;gap:6px;">
-            <span class="tag honey">${h.trang_thai || "—"}</span>
+            <span class="tag honey">${escHtml(h.trang_thai || "—")}</span>
             ${h.hoadon_url ? `<button class="icon-btn" title="Xem hoá đơn" onclick="event.stopPropagation();openInvoiceImage('${escAttr(h.hoadon_url)}')">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2h12v19l-2.5-1.5L13 21l-2.5-1.5L8 21l-2-1.5z"/></svg>
             </button>` : ""}
           </span>
         </div>
-        <div class="muted" style="font-size:12.5px;">${h.ly_do_sua || "—"}${h.chi_phi_sua ? " · " + formatNumber(h.chi_phi_sua) + " đ" : ""}</div>
+        <div class="muted" style="font-size:12.5px;">${escHtml(h.ly_do_sua || "—")}${h.chi_phi_sua ? " · " + formatNumber(h.chi_phi_sua) + " đ" : ""}</div>
       </div>`).join("") : '<p class="muted">Chưa có lịch sử công cụ.</p>'}
   `;
   document.getElementById("spFoot").style.display = "none";
@@ -4059,7 +4107,7 @@ async function openSpHistoryForm(hisId, forceEdit){
               ondblclick="openRelFieldPicker('lichsu_congcu','${f}', this)">
             <span class="field-hint-dbl">Nháy đúp vào ô để chọn từ danh sách</span></div>`;
         }
-        if(LONGTEXT_FIELDS.has(f)) return `<div class="field full"><label>${L(f, "lichsu_congcu")}</label><textarea data-hfield="${f}" ${locked?"disabled":""}>${val}</textarea></div>`;
+        if(LONGTEXT_FIELDS.has(f)) return `<div class="field full"><label>${L(f, "lichsu_congcu")}</label><textarea data-hfield="${f}" ${locked?"disabled":""}>${escHtml(val)}</textarea></div>`;
         if(URL_FIELDS.has(f)) return imageFieldBlockHtml("data-hfield", f, "lichsu_congcu", val, locked);
         if(DATE_FIELDS_HINT(f)) return `<div class="field"><label>${L(f, "lichsu_congcu")}</label><input type="date" data-hfield="${f}" data-datefield="1" value="${vnToIso(val)}" ${locked?"disabled":""}></div>`;
         return `<div class="field"><label>${L(f, "lichsu_congcu")}${pkNote}</label><input type="text" data-hfield="${f}" value="${escAttr(val)}" ${fieldLocked?"disabled":""}></div>`;
@@ -4121,27 +4169,27 @@ async function openDetail(id){
 
   const body = document.getElementById("detailBody");
   body.innerHTML = `
-    ${cc.photo_url ? `<div class="img-preview" style="max-width:220px;margin-bottom:14px;"><img src="${driveDirectLink(cc.photo_url)}" onerror="this.parentElement.style.display='none'"></div>` : ""}
+    ${cc.photo_url ? `<div class="img-preview" style="max-width:220px;margin-bottom:14px;"><img src="${escAttr(driveDirectLink(cc.photo_url))}" onerror="this.parentElement.style.display='none'"></div>` : ""}
     <div class="info-card">
-      <div><span class="k">Danh mục thiết bị</span><span class="v">${dm?dm.danh_muc_ten:(cc.danh_muc_ma||"—")}</span></div>
-      <div><span class="k">Nhân sự đang dùng</span><span class="v">${nv?nv.nhanvien_ten:"—"} (${cc.nhanvien_ma||"—"})</span></div>
-      <div><span class="k">Phòng ban</span><span class="v">${pb?pb.phongban_ten:"—"}</span></div>
-      <div><span class="k">Khu vực</span><span class="v">${cc.khu_vuc||"—"}</span></div>
+      <div><span class="k">Danh mục thiết bị</span><span class="v">${escHtml(dm?dm.danh_muc_ten:(cc.danh_muc_ma||"—"))}</span></div>
+      <div><span class="k">Nhân sự đang dùng</span><span class="v">${escHtml(nv?nv.nhanvien_ten:"—")} (${escHtml(cc.nhanvien_ma||"—")})</span></div>
+      <div><span class="k">Phòng ban</span><span class="v">${escHtml(pb?pb.phongban_ten:"—")}</span></div>
+      <div><span class="k">Khu vực</span><span class="v">${escHtml(cc.khu_vuc||"—")}</span></div>
       <div><span class="k">Giá trị tài sản (VNĐ)</span><span class="v">${cc.gia_tri?formatNumber(cc.gia_tri):"—"}</span></div>
-      <div><span class="k">Ngày nhận</span><span class="v">${cc.ngay_nhan||"—"}</span></div>
-      <div><span class="k">Tình trạng khi nhận</span><span class="v">${cc.tinhtrang_khinhan||"—"}</span></div>
-      <div><span class="k">Bản quyền hệ điều hành</span><span class="v">${cc.banquyen_hedieuhanh||"—"}</span></div>
-      <div><span class="k">Bản quyền Office</span><span class="v">${cc.banquyen_office||cc.banquyen_EOM||"—"}</span></div>
+      <div><span class="k">Ngày nhận</span><span class="v">${escHtml(cc.ngay_nhan||"—")}</span></div>
+      <div><span class="k">Tình trạng khi nhận</span><span class="v">${escHtml(cc.tinhtrang_khinhan||"—")}</span></div>
+      <div><span class="k">Bản quyền hệ điều hành</span><span class="v">${escHtml(cc.banquyen_hedieuhanh||"—")}</span></div>
+      <div><span class="k">Bản quyền Office</span><span class="v">${escHtml(cc.banquyen_office||cc.banquyen_EOM||"—")}</span></div>
     </div>
 
     <h3 class="serif" style="font-size:15px;margin:0 0 8px;color:var(--forest-deep);">Thông số kỹ thuật</h3>
     ${specs.length? `<table class="mini-table"><thead><tr><th>Thuộc tính</th><th>Giá trị</th></tr></thead>
-      <tbody>${specs.map(s=>`<tr><td>${attrName[s.thuoc_tinh_ma]||s.thuoc_tinh_ma}</td><td>${s.gia_tri||"—"}</td></tr>`).join("")}</tbody></table>`
+      <tbody>${specs.map(s=>`<tr><td>${escHtml(attrName[s.thuoc_tinh_ma]||s.thuoc_tinh_ma)}</td><td>${escHtml(s.gia_tri||"—")}</td></tr>`).join("")}</tbody></table>`
       : `<p class="muted" style="font-size:12.8px;">Chưa có thông số kỹ thuật được ghi nhận.</p>`}
 
     <h3 class="serif" style="font-size:15px;margin:18px 0 8px;color:var(--forest-deep);">Lịch sử công cụ</h3>
     ${history.length? `<table class="mini-table"><thead><tr><th>Ngày</th><th>Lý do</th><th>Nội dung sửa</th><th>Chi phí</th><th>Trạng thái sửa chữa</th><th>Hoá đơn</th></tr></thead>
-      <tbody>${history.map(h=>`<tr><td>${h.ngay_sua||"—"}</td><td>${h.ly_do_sua||"—"}</td><td>${h.noi_dung_sua||"—"}</td><td>${h.chi_phi_sua?formatNumber(h.chi_phi_sua):"—"}</td><td><span class="tag honey">${h.trang_thai||"—"}</span></td><td>${h.hoadon_url?`<a href="${h.hoadon_url}" target="_blank">Xem</a>`:"—"}</td></tr>`).join("")}</tbody></table>`
+      <tbody>${history.map(h=>`<tr><td>${escHtml(h.ngay_sua||"—")}</td><td>${escHtml(h.ly_do_sua||"—")}</td><td>${escHtml(h.noi_dung_sua||"—")}</td><td>${h.chi_phi_sua?formatNumber(h.chi_phi_sua):"—"}</td><td><span class="tag honey">${escHtml(h.trang_thai||"—")}</span></td><td>${h.hoadon_url?`<a href="${escAttr(h.hoadon_url)}" target="_blank">Xem</a>`:"—"}</td></tr>`).join("")}</tbody></table>`
       : `<p class="muted" style="font-size:12.8px;">Chưa có lịch sử công cụ.</p>`}
   `;
   pushOverlay("detailOverlay");
