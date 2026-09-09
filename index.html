@@ -846,7 +846,11 @@ const CONFIG = {
     table:["danh_muc_ma","danh_muc_ten","nhom","ten_nhom","hinh_thuc"],
     sections:[{title:"Thông tin danh mục", fields:["danh_muc_ma","danh_muc_ten","nhom","ten_nhom","hinh_thuc"]}],
     relations:{},
-    filters:["nhom","hinh_thuc"]
+    filters:["nhom","hinh_thuc"],
+    // Mã danh mục phải sinh THEO TỪNG NHÓM (tiền tố = đúng giá trị cột "nhom" vừa chọn,
+    // số chạy tính riêng trong nhóm đó), không sinh chung 1 dãy số toàn sheet như các
+    // sheet AUTO_CODE_SHEETS khác -> xem xử lý riêng trong openForm().
+    codeGroupField: "nhom"
   },
   danhmuc_chitiet: {
     label:"Danh mục chi tiết", desc:"Danh mục con trực thuộc danh mục cha",
@@ -1180,6 +1184,25 @@ function nextCodeFromRows(rows, field){
   const nextNum = maxNum + 1;
   const nextStr = String(nextNum);
   return prefix + nextStr.padStart(Math.max(width, nextStr.length), "0");
+}
+/* Sinh mã kế tiếp CHỈ TRONG PHẠM VI 1 nhóm (vd nhom="DP" thì chỉ tính số chạy trong các
+   dòng có nhom="DP", tiền tố luôn là đúng giá trị nhóm đang chọn) — khác với nextCodeFromRows
+   (tính chung toàn bộ dòng của sheet, không phân biệt nhóm). Dùng cho danh_muc (codeGroupField). */
+function nextCodeForGroup(rows, pkField, groupField, groupValue){
+  const gv = String(groupValue || "").trim();
+  if(!gv) return null;
+  let maxNum = -1, width = 5; // mặc định đệm 5 số (vd CCDC00001) nếu nhóm chưa có dòng nào
+  rows.forEach(r=>{
+    if(String(r[groupField] ?? "").trim().toUpperCase() !== gv.toUpperCase()) return;
+    const m = String(r[pkField] ?? "").trim().match(/(\d+)$/);
+    if(m){
+      const num = parseInt(m[1], 10);
+      if(num > maxNum){ maxNum = num; width = m[1].length; }
+    }
+  });
+  const nextNum = maxNum + 1;
+  const nextStr = String(nextNum);
+  return gv + nextStr.padStart(Math.max(width, nextStr.length), "0");
 }
 async function apiFetchNextCode(sheet, fieldOverride){
   try{
@@ -1717,23 +1740,33 @@ async function loadTtRowsForCongCu(congCuMa, danhMucMa){
   ttRows = []; ttRowSeq = 0;
   ttCurrentDanhMuc = danhMucMa || null;
   const [specRows, attrRows] = await Promise.all([apiList("thongso_kythuat"), apiList("thuoc_tinh")]);
-  const tenMap = {}; attrRows.forEach(a => { tenMap[a.thuoc_tinh_ma] = a.thuoc_tinh_ten; });
+  // Tra tên theo CẢ mã gốc lẫn mã đã chuẩn hoá (bỏ số 0 đệm) -> không lệch khi dữ liệu cũ
+  // lưu mã kiểu "TT1" còn sheet thuoc_tinh hiện tại là "TT000001".
+  const tenMap = {};
+  attrRows.forEach(a => { tenMap[a.thuoc_tinh_ma] = a.thuoc_tinh_ten; tenMap[normalizeCodeKey(a.thuoc_tinh_ma)] = a.thuoc_tinh_ten; });
+  // existingByAttr key theo mã ĐÃ CHUẨN HOÁ, để 1 thuộc tính không bị coi là "2 thuộc tính
+  // khác nhau" chỉ vì lệch số 0 đệm giữa dữ liệu cũ (thongso_kythuat) và mã hiện hành (thuoc_tinh).
   const existingByAttr = {};
   if(congCuMa){
-    specRows.filter(s => s.cong_cu_ma === congCuMa).forEach(s => { existingByAttr[s.thuoc_tinh_ma] = s.gia_tri || ""; });
+    specRows.filter(s => s.cong_cu_ma === congCuMa).forEach(s => {
+      existingByAttr[normalizeCodeKey(s.thuoc_tinh_ma)] = { rawMa: s.thuoc_tinh_ma, gia_tri: s.gia_tri || "" };
+    });
   }
   if(ttCurrentDanhMuc){
     const norm = normalizeCodeKey(ttCurrentDanhMuc);
     attrRows.filter(a => normalizeCodeKey(a.danh_muc_ma) === norm).forEach(a => {
-      const has = Object.prototype.hasOwnProperty.call(existingByAttr, a.thuoc_tinh_ma);
+      const attrNorm = normalizeCodeKey(a.thuoc_tinh_ma);
+      const existing = existingByAttr[attrNorm];
+      // Dùng LUÔN mã chuẩn hiện tại (a.thuoc_tinh_ma) cho dòng hiển thị -> khi Lưu lại sẽ tự
+      // "di trú" mã cũ (nếu lệch đệm số) sang đúng mã chuẩn, hết trùng lặp dòng thô về sau.
       ttRows.push({ id: ++ttRowSeq, thuoc_tinh_ma: a.thuoc_tinh_ma, thuoc_tinh_ten: a.thuoc_tinh_ten,
-        gia_tri: has ? existingByAttr[a.thuoc_tinh_ma] : "", _existing: has });
-      delete existingByAttr[a.thuoc_tinh_ma];
+        gia_tri: existing ? existing.gia_tri : "", _existing: !!existing });
+      if(existing) delete existingByAttr[attrNorm];
     });
   }
   // các thông số đã lưu trước đó nhưng không khớp Danh mục hiện tại -> vẫn hiện, không mất dữ liệu
-  Object.entries(existingByAttr).forEach(([ma, val]) => {
-    ttRows.push({ id: ++ttRowSeq, thuoc_tinh_ma: ma, thuoc_tinh_ten: tenMap[ma] || ma, gia_tri: val, _existing: true });
+  Object.values(existingByAttr).forEach(({ rawMa, gia_tri }) => {
+    ttRows.push({ id: ++ttRowSeq, thuoc_tinh_ma: rawMa, thuoc_tinh_ten: tenMap[rawMa] || tenMap[normalizeCodeKey(rawMa)] || rawMa, gia_tri, _existing: true });
   });
 }
 function getTtRow(id){ return ttRows.find(r=>r.id===id); }
@@ -2734,7 +2767,7 @@ async function openForm(id){
   const record = editingId ? rows.find(r=>idOf(r,cfg.pk)===editingId) : {};
 
   let autoCode = null;
-  if(!editingId && AUTO_CODE_SHEETS.includes(currentSheet)){
+  if(!editingId && AUTO_CODE_SHEETS.includes(currentSheet) && !cfg.codeGroupField){
     autoCode = await apiFetchNextCode(currentSheet);
   }
 
@@ -2795,8 +2828,9 @@ async function openForm(id){
       const options = distinctValues(rows, f);
       const datalist = options.length ? `<datalist id="${listId}">${options.map(o=>`<option value="${o}">`).join("")}</datalist>` : "";
       const pkNote = isPk ? (AUTO_CODE_SHEETS.includes(currentSheet) ? ' <span class="field-hint">(tự sinh)</span>' : ' <span class="field-hint">(khoá chính)</span>') : '';
+      const groupCodePlaceholder = (isPk && cfg.codeGroupField && !val) ? ` placeholder="Chọn ${L(cfg.codeGroupField, currentSheet)} trước để sinh mã"` : "";
       return `<div class="field"><label>${L(f, currentSheet)}${pkNote}</label>
-        <input type="text" data-field="${f}" value="${escAttr(val)}" ${options.length?`list="${listId}"`:""} ${isLockedPk ? "readonly" : ""}>
+        <input type="text" data-field="${f}" value="${escAttr(val)}"${groupCodePlaceholder} ${options.length?`list="${listId}"`:""} ${isLockedPk ? "readonly" : ""}>
         ${datalist}</div>`;
     }).join("");
     return `<fieldset class="section"><legend>${sec.title}</legend><div class="field-grid">${fieldsHtml}</div></fieldset>`;
@@ -2808,6 +2842,25 @@ async function openForm(id){
     body.innerHTML += `<fieldset class="section"><legend>Thông số kỹ thuật</legend><div id="ttContainerForm"></div></fieldset>`;
     await loadTtRowsForCongCu(record && record.cong_cu_ma, record && record.danh_muc_ma);
     renderTtTable("ttContainerForm", false);
+  }
+
+  // Sinh mã THEO NHÓM (vd danh_muc): mã chỉ được tính ngay khi người dùng chọn/gõ xong
+  // Nhóm, tiền tố = đúng giá trị Nhóm, số chạy tính riêng trong phạm vi nhóm đó — không
+  // sinh sẵn 1 mã chung cho toàn sheet như lúc mở form (xem đoạn "let autoCode" ở trên).
+  if(!editingId && cfg.codeGroupField){
+    const groupField = cfg.codeGroupField;
+    const codeField = cfg.pk[0];
+    const groupInput = body.querySelector(`[data-field="${groupField}"]`);
+    const codeInput = body.querySelector(`[data-field="${codeField}"]`);
+    if(groupInput && codeInput){
+      const recomputeGroupCode = ()=>{
+        const gv = groupInput.value.trim();
+        if(!gv){ codeInput.value = ""; return; }
+        codeInput.value = nextCodeForGroup(rows, codeField, groupField, gv) || "";
+      };
+      groupInput.addEventListener("input", debounce(recomputeGroupCode, 150));
+      groupInput.addEventListener("change", recomputeGroupCode);
+    }
   }
 
   wireImageFields(body);
