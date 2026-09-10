@@ -570,8 +570,9 @@
     <nav class="nav" id="nav"></nav>
     <div class="sidebar-foot">Đồng bộ trực tiếp với Google Sheet nội bộ
       <div style="margin-top:8px;" id="sidebarUserInfo"></div>
+      <div style="margin-top:6px;"><a href="javascript:void(0)" onclick="changeMyPassword()" style="color:#B9C6B3;text-decoration:underline;">Đổi mật khẩu đăng nhập</a></div>
       <div style="margin-top:6px;"><a href="javascript:void(0)" onclick="promptEditPassword('Nhập mật khẩu chỉnh sửa (để trống nếu không cần):')" style="color:#B9C6B3;text-decoration:underline;">Đặt/đổi mật khẩu chỉnh sửa</a></div>
-      <div style="margin-top:4px;"><a href="javascript:void(0)" onclick="openChangePasswordModal()" style="color:#B9C6B3;text-decoration:underline;">Đổi mật khẩu đăng nhập</a></div>
+      <div style="margin-top:4px;"><a href="javascript:void(0)" onclick="const n=window.prompt('Tên của bạn (hiển thị trong Nhật ký):', getActorName()); if(n!=null) setActorName(n.trim());" style="color:#B9C6B3;text-decoration:underline;">Đặt tên hiển thị trong Nhật ký</a></div>
     </div>
   </aside>
   <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
@@ -738,37 +739,6 @@
   </div>
 </div>
 
-<!-- đổi mật khẩu đăng nhập -->
-<div class="overlay" id="changePwOverlay">
-  <div class="modal" style="max-width:380px;">
-    <div class="modal-head">
-      <h2>Đổi mật khẩu đăng nhập</h2>
-      <button class="modal-close" id="changePwClose">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg>
-      </button>
-    </div>
-    <div class="modal-body">
-      <div class="field full" style="margin-bottom:12px;">
-        <label>Mật khẩu hiện tại</label>
-        <input type="password" id="cpOld" autocomplete="current-password">
-      </div>
-      <div class="field full" style="margin-bottom:12px;">
-        <label>Mật khẩu mới</label>
-        <input type="password" id="cpNew" autocomplete="new-password">
-      </div>
-      <div class="field full">
-        <label>Nhập lại mật khẩu mới</label>
-        <input type="password" id="cpNew2" autocomplete="new-password">
-      </div>
-      <div id="cpError" class="login-error" style="display:none;margin-top:10px;"></div>
-    </div>
-    <div class="modal-foot">
-      <button class="btn btn-ghost" id="changePwCancel">Huỷ</button>
-      <button class="btn btn-primary" id="changePwSave">Lưu mật khẩu mới</button>
-    </div>
-  </div>
-</div>
-
 <div id="toast-wrap"></div>
 
 <script>
@@ -817,7 +787,8 @@ const LABELS = {
   so_luot:"Số lượt đã nhận", lan_phat_gan_nhat:"Lần phát gần nhất",
   hoadon_url:"Hoá đơn (ảnh/URL)",
   nhatky_ma:"Mã nhật ký", thoigian:"Thời gian", nguoi_thuc_hien:"Người thực hiện",
-  hanh_dong:"Hành động", ma_ban_ghi:"Mã bản ghi", chi_tiet:"Chi tiết"
+  hanh_dong:"Hành động", ma_ban_ghi:"Mã bản ghi", chi_tiet:"Chi tiết",
+  mail:"Email đăng nhập", ten:"Họ tên hiển thị", vai_tro:"Vai trò", pass_word:"Mật khẩu"
 };
 /* nhãn riêng theo từng sheet, ưu tiên hơn nhãn dùng chung ở trên (tránh nhầm lẫn
    khi cùng 1 tên cột nhưng ý nghĩa khác nhau ở mỗi sheet, vd trang_thai) */
@@ -974,6 +945,14 @@ const CONFIG = {
     sections:[{title:"Chi tiết nhật ký", fields:["nhatky_ma","thoigian","nguoi_thuc_hien","hanh_dong","sheet","ma_ban_ghi","chi_tiet"]}],
     relations:{},
     filters:["hanh_dong","sheet"]
+  },
+  nguoi_dung: {
+    label:"Tài khoản đăng nhập", desc:"Quản lý tài khoản đăng nhập, vai trò và đặt lại mật khẩu (chỉ Admin)",
+    icon:iconKey(), pk:["mail"], adminOnly:true,
+    table:["mail","ten","vai_tro"],
+    sections:[{title:"Thông tin tài khoản", fields:["mail","ten","vai_tro","pass_word"]}],
+    relations:{},
+    filters:["vai_tro"]
   }
 };
 
@@ -991,6 +970,7 @@ function iconDocument(){return `<svg width="17" height="17" viewBox="0 0 24 24" 
 function iconReceipt(){return `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 2h12v19l-2.5-1.5L13 21l-2.5-1.5L8 21l-2-1.5z"/><path d="M9 7h6M9 11h6M9 15h4"/></svg>`;}
 function iconClock(){return `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>`;}
 function iconBell(){return `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>`;}
+function iconKey(){return `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="8" cy="15" r="4"/><path d="M10.5 12.5L20 3M16 7l3 3M13 10l2 2"/></svg>`;}
 function iconUpload(){return `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21V8m0 0l-4 4m4-4l4 4"/><path d="M4 21h16"/></svg>`;}
 
 /* ================= MỤC 10: "TRUY CẬP GẦN ĐÂY" =================
@@ -1034,9 +1014,12 @@ const NAV_TREE = [
   { section:"NHẮC VIỆC & NHẬT KÝ", items:[
     { key:"nhac_viec" },
     { key:"nhat_ky" }
+  ]},
+  { section:"QUẢN TRỊ", items:[
+    { key:"nguoi_dung" }
   ]}
 ];
-let expandedGroups = new Set();
+let expandedGroups = new Set(["cong_cu"]);
 let countsCache = {};
 
 /* các sheet có khoá chính đơn -> tự sinh mã nối tiếp khi thêm mới, không cho sửa tay */
@@ -1155,6 +1138,31 @@ function renderSidebarUser(){
     <a href="javascript:void(0)" onclick="logout()" style="color:#B9C6B3;text-decoration:underline;">Đăng xuất</a>` : "";
 }
 function logout(){ clearSession(); location.reload(); }
+
+/* ================= ĐỔI MẬT KHẨU ĐĂNG NHẬP (tự phục vụ) =================
+   Bất kỳ ai đã đăng nhập đều đổi được mật khẩu của chính mình (cần đúng mật
+   khẩu hiện tại). Muốn ĐẶT LẠI mật khẩu cho người khác (quên mật khẩu): tài
+   khoản Admin vào mục "Tài khoản đăng nhập" ở menu, sửa bản ghi tương ứng và
+   nhập mật khẩu mới vào ô "Mật khẩu" (để trống nếu không muốn đổi). */
+async function changeMyPassword(){
+  const session = getSession();
+  if(!session || !session.mail){ toast("Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại.", true); return; }
+  const oldPw = window.prompt("Nhập mật khẩu đăng nhập HIỆN TẠI:");
+  if(oldPw == null) return;
+  const newPw = window.prompt("Nhập mật khẩu MỚI (tối thiểu 4 ký tự):");
+  if(newPw == null) return;
+  if(newPw.length < 4){ toast("Mật khẩu mới phải có ít nhất 4 ký tự.", true); return; }
+  const confirmPw = window.prompt("Nhập lại mật khẩu MỚI để xác nhận:");
+  if(confirmPw == null) return;
+  if(confirmPw !== newPw){ toast("Xác nhận mật khẩu không khớp, vui lòng thử lại.", true); return; }
+  try{
+    const json = await apiPost({ action:"changepassword", mail: session.mail, oldPassword: oldPw, newPassword: newPw });
+    if(!json.success) throw new Error(json.message || "Đổi mật khẩu thất bại");
+    toast("Đã đổi mật khẩu thành công. Lần đăng nhập sau vui lòng dùng mật khẩu mới.");
+  }catch(err){
+    toast("Đổi mật khẩu thất bại: " + err.message, true);
+  }
+}
 /* vai_tro "Admin" mới được Thêm/Sửa/Xoá; "User" chỉ xem. Kiểm tra lại phía server
    (xem _requireAdminRole trong app.gs) — ẩn nút ở đây chỉ để trải nghiệm gọn hơn. */
 function isAdmin(){
@@ -1197,53 +1205,9 @@ function promptEditPassword(message){
   return pw != null;
 }
 
-/* ---------- tên người thao tác (ghi vào Nhật ký/audit log, Nhóm C.12) ----------
-   Luôn lấy đúng tên (hoặc email nếu chưa có tên) của TÀI KHOẢN ĐANG ĐĂNG NHẬP, không
-   cho nhập tay tuỳ ý nữa — đảm bảo Nhật ký phản ánh đúng người thực hiện thao tác. */
-function getActorName(){
-  const u = getSession();
-  return (u && (u.ten || u.mail)) || "";
-}
-
-/* ================= ĐỔI MẬT KHẨU ĐĂNG NHẬP =================
-   Cho phép tài khoản đang đăng nhập (User lẫn Admin) tự đổi mật khẩu của chính
-   mình, yêu cầu nhập đúng mật khẩu hiện tại. Gọi action "changepassword" (khác
-   với EDIT_PASSWORD/khoá chỉnh sửa dữ liệu — 2 khái niệm độc lập nhau). */
-function openChangePasswordModal(){
-  document.getElementById("cpOld").value = "";
-  document.getElementById("cpNew").value = "";
-  document.getElementById("cpNew2").value = "";
-  document.getElementById("cpError").style.display = "none";
-  pushOverlay("changePwOverlay");
-  document.getElementById("changePwOverlay").classList.add("show");
-}
-function closeChangePasswordModal(){ popOverlay("changePwOverlay"); document.getElementById("changePwOverlay").classList.remove("show"); }
-document.getElementById("changePwClose").onclick = closeChangePasswordModal;
-document.getElementById("changePwCancel").onclick = closeChangePasswordModal;
-setupOverlayOutsideClick("changePwOverlay", closeChangePasswordModal);
-document.getElementById("changePwSave").onclick = async ()=>{
-  const oldPw = document.getElementById("cpOld").value;
-  const newPw = document.getElementById("cpNew").value;
-  const newPw2 = document.getElementById("cpNew2").value;
-  const errEl = document.getElementById("cpError");
-  errEl.style.display = "none";
-  if(!oldPw || !newPw){ errEl.textContent = "Vui lòng nhập đầy đủ mật khẩu hiện tại và mật khẩu mới."; errEl.style.display = "block"; return; }
-  if(newPw !== newPw2){ errEl.textContent = "Mật khẩu mới nhập lại không khớp."; errEl.style.display = "block"; return; }
-  if(newPw.length < 4){ errEl.textContent = "Mật khẩu mới phải có ít nhất 4 ký tự."; errEl.style.display = "block"; return; }
-  const btn = document.getElementById("changePwSave");
-  btn.disabled = true; btn.textContent = "Đang lưu...";
-  try{
-    const mail = (getSession()||{}).mail || "";
-    const json = await apiPost({ action:"changepassword", mail, old_pass_word: oldPw, new_pass_word: newPw });
-    if(!json.success) throw new Error(json.message || "Đổi mật khẩu thất bại");
-    toast("Đã đổi mật khẩu thành công");
-    closeChangePasswordModal();
-  }catch(err){
-    errEl.textContent = err.message; errEl.style.display = "block";
-  }finally{
-    btn.disabled = false; btn.textContent = "Lưu mật khẩu mới";
-  }
-};
+/* ---------- tên người thao tác (ghi vào Nhật ký/audit log, Nhóm C.12) ---------- */
+function getActorName(){ return localStorage.getItem("hcns_actor_name") || ""; }
+function setActorName(n){ localStorage.setItem("hcns_actor_name", n || ""); }
 
 /* ---------- helpers gọi API ---------- */
 /* Chỉ mục tìm kiếm dạng chuỗi (gộp mọi giá trị của 1 dòng, viết thường) được
@@ -1332,6 +1296,42 @@ async function apiListRemote(sheet, _isRetry){
   }
   return json;
 }
+/* Tải NHIỀU sheet trong 1 LƯỢT GỌI MẠNG duy nhất (action=listmulti), thay vì
+   mỗi sheet 1 round-trip riêng (apiList từng cái). Mỗi round-trip tới Apps
+   Script đều có độ trễ khởi tạo riêng (mở Spreadsheet, xác thực...) nên gộp
+   lại giúp giảm đáng kể tổng thời gian chờ ở những màn hình cần nhiều sheet
+   cùng lúc (vd Tổng quan cần 7 sheet). Sheet nào đã có sẵn trong dataCache
+   hoặc trong localStorage (SWR) thì dùng luôn, không tính vào lượt gọi gộp. */
+async function apiListMulti(sheets){
+  const need = sheets.filter(s=>!dataCache[s]);
+  if(!need.length) return;
+  const toFetch = [];
+  need.forEach(s=>{
+    const local = loadLocalCache(s);
+    if(local && local.rows.length){
+      dataCache[s] = attachSearchIndex(local.rows);
+      refreshSheetInBackground(s);
+    }else{
+      toFetch.push(s);
+    }
+  });
+  if(!toFetch.length) return;
+  try{
+    const json = await apiGet("listmulti", { sheets: toFetch.join(","), editPassword: getEditPassword() });
+    if(json.success){
+      Object.entries(json.data).forEach(([s, res])=>{
+        if(res && res.rows){
+          dataCache[s] = attachSearchIndex(res.rows);
+          saveLocalCache(s, res.rows);
+        }
+        // res.error (vd authError sheet PII chưa nhập mật khẩu) -> bỏ qua, để
+        // apiList(sheet) gọi lại riêng lẻ như cũ khi thực sự cần tới sheet đó
+        // (sẽ tự hỏi lại mật khẩu đúng theo luồng authError sẵn có).
+      });
+    }
+  }catch(e){ /* lỗi mạng -> bỏ qua, apiList() từng sheet sẽ tự tải lại khi cần */ }
+}
+
 /* Sinh mã kế tiếp HOÀN TOÀN Ở PHÍA TRÌNH DUYỆT, không gọi server (action=nextcode
    trước đây phải chờ round-trip mạng mỗi lần bấm "Thêm mới"). Vì mọi màn hình đều
    đã gọi apiList(sheet) để tải dữ liệu trước khi mở form, danh sách bản ghi cần
@@ -1595,20 +1595,18 @@ function buildNav(){
   nav.innerHTML = "";
 
   NAV_TREE.forEach(sectionDef=>{
+    const visibleItems = sectionDef.items.filter(it => !(CONFIG[it.key] && CONFIG[it.key].adminOnly) || isAdmin());
+    if(!visibleItems.length) return; // cả mục trong nhóm đều bị ẩn (vd không phải Admin) -> ẩn luôn tiêu đề nhóm
+
     const secLabel = document.createElement("div");
     secLabel.className = "nav-group-label";
     secLabel.textContent = sectionDef.section;
     nav.appendChild(secLabel);
 
-    sectionDef.items.forEach(itemDef=>{
+    visibleItems.forEach(itemDef=>{
       const key = itemDef.key;
-      // Nhật ký (audit log): chỉ tài khoản Admin mới thấy mục này trên menu.
-      if(key === "nhat_ky" && !isAdmin()) return;
       const cfg = CONFIG[key];
-      // Nhánh con của "Công cụ dụng cụ" (Danh mục, Danh mục chi tiết, Thuộc tính kỹ
-      // thuật, Lịch sử công cụ): chỉ Admin mới thấy mũi tên/mở được các mục con này.
-      const childrenAllowed = key !== "cong_cu" || isAdmin();
-      const hasChildren = !!(itemDef.children && itemDef.children.length) && childrenAllowed;
+      const hasChildren = !!(itemDef.children && itemDef.children.length);
       const isExpanded = expandedGroups.has(key);
       const countVal = countsCache[key] != null ? countsCache[key] : "";
 
@@ -1662,34 +1660,44 @@ function buildNav(){
   }
 }
 async function refreshCounts(){
-  // Chạy song song thay vì tuần tự (for...await) -> tải 1 loạt sheet cùng lúc
-  // khi khởi động, số đếm ở sidebar hiện ra nhanh hơn nhiều thay vì phải chờ
-  // hết sheet này đến sheet khác (mỗi round-trip Apps Script có độ trễ riêng).
+  // Trước đây gọi apiList() (tải TOÀN BỘ dữ liệu) cho từng sheet chỉ để đếm
+  // số dòng -> đây là nguyên nhân chính gây chậm lúc mới đăng nhập (cả chục
+  // round-trip song song, mỗi round-trip lại kéo hết dữ liệu về). Nay dùng
+  // action=counts: 1 LƯỢT GỌI DUY NHẤT, phía server chỉ đọc getLastRow() cho
+  // mỗi sheet (không đọc nội dung từng ô) -> nhanh hơn rất nhiều.
   const keys = Object.keys(CONFIG).filter(key =>
     !CONFIG[key].isOverview && !CONFIG[key].isGroup && !CONFIG[key].isBienBan && !CONFIG[key].isHoaDon && !CONFIG[key].isReminders
   );
-  await Promise.all(keys.map(async key => {
-    try{
-      const rows = await apiList(key);
-      countsCache[key] = rows.length;
-      const el = document.querySelector(`[data-count="${key}"]`);
-      if(el) el.textContent = rows.length;
-    }catch(e){ /* ignore silently for count */ }
-  }));
+  if(!keys.length) return;
+  try{
+    const json = await apiGet("counts", { sheets: keys.join(",") });
+    if(json.success){
+      keys.forEach(key=>{
+        const n = json.data[key];
+        if(n == null) return;
+        countsCache[key] = n;
+        const el = document.querySelector(`[data-count="${key}"]`);
+        if(el) el.textContent = n;
+      });
+    }
+  }catch(e){ /* lỗi mạng -> giữ nguyên số đếm cũ (nếu có), không chặn app */ }
 }
 
 /* Đóng hết mọi overlay đang mở (form thêm/sửa, panel chi tiết, xem hoá đơn,
    picker...) khi người dùng bấm sang mục menu khác. Trước đây các overlay này
    không tự đóng khi chuyển trang -> ở lại "nổi" đè lên nội dung mục mới. */
 function closeAllOverlays(){
-  ["formOverlay","detailOverlay","confirmOverlay","sidePanelOverlay","invoiceOverlay","assetPickOverlay","relPickOverlay","changePwOverlay"]
+  ["formOverlay","detailOverlay","confirmOverlay","sidePanelOverlay","invoiceOverlay","assetPickOverlay","relPickOverlay"]
     .forEach(id=>{ const el = document.getElementById(id); if(el) el.classList.remove("show"); });
   overlayStack = [];
 }
 
 let overviewTimer = null;
 async function switchSheet(key, filter){
-  if(key === "nhat_ky" && !isAdmin()) key = "tong_quan"; // chỉ Admin được xem Nhật ký
+  if(CONFIG[key] && CONFIG[key].adminOnly && !isAdmin()){
+    toast("Chỉ tài khoản Admin mới xem được mục này.", true);
+    key = "tong_quan";
+  }
   closeAllOverlays();
   pbReturnState = null; // rời khỏi ngữ cảnh "Nhân sự theo phòng ban" -> ẩn nút quay lại
   if(overviewTimer){ clearInterval(overviewTimer); overviewTimer = null; }
@@ -2778,6 +2786,9 @@ const URL_FIELDS = new Set(["photo_url","hoadon_url"]);
 /* các trường link (ảnh đại diện, hoá đơn...) chỉ hiện ô nhập khi đang sửa,
    ở chế độ xem thì ẩn đi để tránh lộ link dài, rối giao diện */
 const HIDDEN_IN_VIEW_FIELDS = new Set(["photo_url","hoadon_url"]);
+/* trường mật khẩu (sheet nguoi_dung): KHÔNG BAO GIỜ hiện giá trị đã lưu (kể cả
+   dạng băm) ra màn hình — chỉ hiện ô nhập trống khi sửa, để trống = không đổi. */
+const PASSWORD_FIELDS = new Set(["pass_word"]);
 const DATE_FIELDS_HINT = f => f.startsWith("ngay_") || f==="han_bao_hanh";
 const NUMBER_FIELDS = new Set(["chi_phi_sua","gia_tri"]);
 /* chuyển link chia sẻ Google Drive (dạng .../file/d/ID/view) sang link ảnh xem trực tiếp,
@@ -2992,6 +3003,12 @@ async function openForm(id){
             ondblclick="openRelFieldPicker('${currentSheet}','${f}', this)">
           <span class="field-hint-dbl">Nháy đúp vào ô để chọn từ danh sách</span></div>`;
       }
+      if(PASSWORD_FIELDS.has(f)){
+        const hint = editingId ? "Để trống nếu không đổi mật khẩu" : "Bắt buộc nhập cho tài khoản mới";
+        return `<div class="field"><label>${L(f, currentSheet)}</label>
+          <input type="password" data-field="${f}" value="" autocomplete="new-password" placeholder="${hint}">
+          <span class="field-hint">${hint}</span></div>`;
+      }
       if(LONGTEXT_FIELDS.has(f)){
         return `<div class="field full"><label>${L(f, currentSheet)}</label><textarea data-field="${f}">${escHtml(val)}</textarea></div>`;
       }
@@ -3088,6 +3105,11 @@ function collectFormData(){
   body.querySelectorAll("[data-field]").forEach(el=>{
     data[el.dataset.field] = el.dataset.datefield ? isoToVn(el.value) : el.value.trim();
   });
+  // Mật khẩu để trống khi SỬA nghĩa là "không đổi" -> không gửi field này lên
+  // (nếu gửi chuỗi rỗng, backend sẽ ghi đè xoá mất mật khẩu đã có).
+  if(PASSWORD_FIELDS.size && editingId){
+    PASSWORD_FIELDS.forEach(f=>{ if(data[f] === "") delete data[f]; });
+  }
   return data;
 }
 
@@ -3103,6 +3125,7 @@ function doFormSave(){
   const data = collectFormData();
   const missingPk = cfg.pk.filter(f=>!data[f]);
   if(missingPk.length){ toast(`Vui lòng nhập ${missingPk.map(f=>L(f, sheet)).join(", ")}`, true); return; }
+  if(sheet === "nguoi_dung" && !editingId && !data.pass_word){ toast("Vui lòng nhập mật khẩu cho tài khoản mới", true); return; }
   const errors = validateRecordData(data, sheet);
   if(errors.length){ toast(errors.join(" · "), true); return; }
 
@@ -3223,6 +3246,11 @@ async function renderOverview(forceReload){
   if(forceReload){
     ["nhan_vien","phong_ban","cong_cu","lichsu_congcu","qua_tang"].forEach(s => invalidateSheetCache(s));
   }
+
+  // Gộp 7 sheet Tổng quan cần dùng vào 1 lượt gọi mạng duy nhất (thay vì 7
+  // round-trip riêng lẻ) — xem apiListMulti(). Sau bước này, các apiList()
+  // bên dưới hầu hết chỉ đọc từ dataCache (gần như tức thì).
+  await apiListMulti(["nhan_vien","phong_ban","cong_cu","lichsu_congcu","thongso_kythuat","qua_tang","danh_muc"]);
 
   const [nvRows, pbRows, ccRows, hisRows, specRowsOv, qtRows, dmAllRowsOv] = await Promise.all([
     apiList("nhan_vien"), apiList("phong_ban"), apiList("cong_cu"), apiList("lichsu_congcu"), apiList("thongso_kythuat"),
@@ -4141,6 +4169,9 @@ function switchSpTab(tab){
 }
 
 function spFieldView(f, val, sheet, relMaps){
+  if(PASSWORD_FIELDS.has(f)){
+    return `<div class="sp-field"><span class="k">${L(f, sheet)}</span><span class="v muted">••••••••</span></div>`;
+  }
   const autoInfo = findAutofillRelation(sheet, f);
   let display = (val!=null && val!=="") ? val : null;
   if(autoInfo){
@@ -4179,6 +4210,9 @@ function spFieldEdit(f, val, isPk, sheet){
       <span class="field-hint-dbl">Nháy đúp vào ô để chọn từ danh sách</span></div>`;
   }
   if(isPk) return `<div class="field"><label>${L(f, sheet)} <span class="field-hint">(khoá chính)</span></label><input type="text" value="${escAttr(val ?? "")}" readonly></div>`;
+  if(PASSWORD_FIELDS.has(f)) return `<div class="field"><label>${L(f, sheet)}</label>
+    <input type="password" data-spfield="${f}" value="" autocomplete="new-password" placeholder="Để trống nếu không đổi mật khẩu">
+    <span class="field-hint">Chỉ nhập nếu muốn ĐẶT LẠI mật khẩu đăng nhập cho tài khoản này</span></div>`;
   if(LONGTEXT_FIELDS.has(f)) return `<div class="field full"><label>${L(f, sheet)}</label><textarea data-spfield="${f}">${escHtml(val)}</textarea></div>`;
   if(URL_FIELDS.has(f)) return imageFieldBlockHtml("data-spfield", f, sheet, val, false);
   if(DATE_FIELDS_HINT(f)) return `<div class="field"><label>${L(f, sheet)}</label><input type="date" data-spfield="${f}" data-datefield="1" value="${vnToIso(val)}"></div>`;
@@ -4262,6 +4296,7 @@ function saveSpInfo(){
   body.querySelectorAll("[data-spfield]").forEach(el => {
     data[el.dataset.spfield] = el.dataset.datefield ? isoToVn(el.value) : el.value.trim();
   });
+  PASSWORD_FIELDS.forEach(f=>{ if(data[f] === "") delete data[f]; });
   const errors = validateRecordData(data, sheet);
   if(errors.length){ toast(errors.join(" · "), true); return; }
   queueOperation("update", sheet, id, data, ()=>{
@@ -4509,7 +4544,6 @@ document.addEventListener("keydown", (e)=>{
       else if(top === "invoiceOverlay"){ popOverlay("invoiceOverlay"); document.getElementById("invoiceOverlay").classList.remove("show"); }
       else if(top === "assetPickOverlay") closeAssetPicker();
       else if(top === "relPickOverlay") closeRelPicker();
-      else if(top === "changePwOverlay") closeChangePasswordModal();
       return;
     }
     if(isMobileView() && document.getElementById("sidebar").classList.contains("open")) setSidebarOpen(false);
