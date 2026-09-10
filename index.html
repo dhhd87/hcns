@@ -3212,6 +3212,62 @@ function sparklineSvg(monthKeys, series, fmt){
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:100%;height:auto;display:block;">${gridLines}${xLabels}${paths}</svg>${legend}`;
 }
 
+/* ---------- biểu đồ tròn (donut) SVG thuần — dùng cho phân bố theo nhóm (vd vùng miền) ---------- */
+const DONUT_COLORS = ["#42624E","#C99A4B","#B65C42","#93AF89","#2B4635","#A97F35","#75946B","#8B9583","#5D6B57","#D7C08A"];
+function donutChartSvg(items){
+  const total = items.reduce((s,i)=>s+i.value,0) || 1;
+  const cx=88, cy=88, r=66, strokeW=28;
+  const circumference = 2*Math.PI*r;
+  let offset = 0;
+  const segs = items.map((it,i)=>{
+    const frac = it.value/total;
+    const dash = Math.max(0, frac*circumference - (items.length>1?1.5:0)); // khe hở nhỏ giữa các lát
+    const seg = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${DONUT_COLORS[i%DONUT_COLORS.length]}" stroke-width="${strokeW}"
+      stroke-dasharray="${dash.toFixed(1)} ${(circumference-dash).toFixed(1)}" stroke-dashoffset="${(-offset).toFixed(1)}"
+      transform="rotate(-90 ${cx} ${cy})" ${it.onclick?`style="cursor:pointer;" onclick="${it.onclick}"`:""}>
+      <title>${it.label}: ${it.value} (${(frac*100).toFixed(1)}%)</title></circle>`;
+    offset += frac*circumference;
+    return seg;
+  }).join("");
+  const legend = items.map((it,i)=>`
+    <div style="display:flex;align-items:center;gap:7px;font-size:12.3px;color:#5D6B57;padding:4px 0;${it.onclick?"cursor:pointer;":""}" ${it.onclick?`onclick="${it.onclick}"`:""}>
+      <span style="width:10px;height:10px;border-radius:3px;background:${DONUT_COLORS[i%DONUT_COLORS.length]};display:inline-block;flex:none;"></span>
+      <span style="flex:1;">${it.label}</span>
+      <b style="color:var(--forest-deep);">${it.value}</b>
+      <span style="color:#9AA391;font-size:11px;width:38px;text-align:right;">${(it.value/total*100).toFixed(0)}%</span>
+    </div>`).join("");
+  return `<div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap;">
+    <svg width="176" height="176" viewBox="0 0 176 176" style="flex:none;">
+      ${segs}
+      <circle cx="${cx}" cy="${cy}" r="${r-strokeW/2-3}" fill="var(--white)"/>
+      <text x="${cx}" y="${cy-3}" text-anchor="middle" font-size="21" font-weight="700" fill="var(--forest-deep)" font-family="'Be Vietnam Pro',sans-serif">${total}</text>
+      <text x="${cx}" y="${cy+15}" text-anchor="middle" font-size="10" fill="#9AA391">nhân sự</text>
+    </svg>
+    <div style="flex:1;min-width:150px;">${legend}</div>
+  </div>`;
+}
+
+/* ---------- biểu đồ cột (column) SVG thuần — dùng cho phân bố theo nhóm có thứ tự (vd độ tuổi, thâm niên) ---------- */
+function columnChartSvg(items, colorVar){
+  colorVar = colorVar || "var(--sage-deep)";
+  const barW = 40, gap = 22, padT = 26, padB = 30;
+  const W = items.length*(barW+gap) + gap, H = 190;
+  const maxVal = Math.max(1, ...items.map(i=>i.value));
+  const innerH = H - padT - padB;
+  const bars = items.map((it,i)=>{
+    const x = gap + i*(barW+gap);
+    const h = it.value>0 ? Math.max(4, (it.value/maxVal)*innerH) : 0;
+    const y = H - padB - h;
+    return `<g ${it.onclick?`style="cursor:pointer;" onclick="${it.onclick}"`:""}>
+      <rect x="${x}" y="${y}" width="${barW}" height="${h}" rx="7" fill="${colorVar}"><title>${it.label}: ${it.value}</title></rect>
+      <text x="${x+barW/2}" y="${y-8}" text-anchor="middle" font-size="12" font-weight="700" fill="var(--forest-deep)" font-family="'Be Vietnam Pro',sans-serif">${it.value}</text>
+      <text x="${x+barW/2}" y="${H-12}" text-anchor="middle" font-size="10.5" fill="#8B9583">${it.label}</text>
+    </g>`;
+  }).join("");
+  const baseline = `<line x1="0" y1="${H-padB}" x2="${W}" y2="${H-padB}" stroke="#ECEBDD" stroke-width="1"/>`;
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:100%;height:auto;display:block;">${baseline}${bars}</svg>`;
+}
+
 /* ---------- Tổng quan (dashboard) ---------- */
 async function renderOverview(forceReload){
   const wrap = document.getElementById("tableWrap");
@@ -3320,7 +3376,7 @@ async function renderOverview(forceReload){
   const maxTenure = Math.max(1, ...tenureCounts);
 
   // ---- sắp sinh nhật (trong N ngày tới, không tính theo năm sinh) ----
-  const BIRTHDAY_WINDOW_DAYS_OV = 30;
+  const BIRTHDAY_WINDOW_DAYS_OV = 3;
   const upcomingBirthdays = nvRows.filter(nv=>String(nv.tinh_trang||"").toLowerCase().includes("đang")).map(nv=>{
     const d = _parseVnDateFE(nv.ngay_sinh);
     if(!d) return null;
@@ -3411,16 +3467,16 @@ async function renderOverview(forceReload){
       ${topQt.map(([k,v]) => barRow(qtLoaiName[k]||k, v, maxQt, `filterBySheetField('qua_tang','ma_qua_tang','${escAttr(k)}','${escAttr(qtLoaiName[k]||k)}')`)).join("") || '<p class="muted">Chưa có dữ liệu</p>'}
     </div>
     <div class="ov-card">
-      <div class="ov-card-head"><h3>Nhân sự theo vùng miền</h3><span>Bấm để xem danh sách nhân sự theo vùng miền</span></div>
-      ${topVung.map(([k,v]) => barRow(k, v, maxVung, `filterNhanVienByVungMien('${escAttr(k)}')`)).join("") || '<p class="muted">Chưa có dữ liệu</p>'}
+      <div class="ov-card-head"><h3>Nhân sự theo vùng miền</h3><span>Bấm vào lát/dòng để xem danh sách</span></div>
+      ${topVung.length ? donutChartSvg(topVung.map(([k,v]) => ({ label:k, value:v, onclick:`filterNhanVienByVungMien('${escAttr(k)}')` }))) : '<p class="muted">Chưa có dữ liệu</p>'}
     </div>
     <div class="ov-card">
-      <div class="ov-card-head"><h3>Phân bố độ tuổi nhân sự</h3><span>Đang làm việc · bấm để xem danh sách theo nhóm tuổi</span></div>
-      ${AGE_BINS_OV.map((b,i) => barRow(b.label, ageCounts[i], maxAge, `filterNhanVienByAgeBin(${b.min},${b.max},'${escAttr(b.label)}')`)).join("")}
+      <div class="ov-card-head"><h3>Phân bố độ tuổi nhân sự</h3><span>Đang làm việc · bấm cột để xem danh sách</span></div>
+      ${columnChartSvg(AGE_BINS_OV.map((b,i) => ({ label:b.label, value:ageCounts[i], onclick:`filterNhanVienByAgeBin(${b.min},${b.max},'${escAttr(b.label)}')` })), "var(--sage-deep)")}
     </div>
     <div class="ov-card">
-      <div class="ov-card-head"><h3>Thâm niên công tác</h3><span>Đang làm việc · bấm để xem danh sách theo nhóm thâm niên</span></div>
-      ${TENURE_BINS_OV.map((b,i) => barRow(b.label, tenureCounts[i], maxTenure, `filterNhanVienByTenureBin(${b.min},${b.max},'${escAttr(b.label)}')`)).join("")}
+      <div class="ov-card-head"><h3>Thâm niên công tác</h3><span>Đang làm việc · bấm cột để xem danh sách</span></div>
+      ${columnChartSvg(TENURE_BINS_OV.map((b,i) => ({ label:b.label, value:tenureCounts[i], onclick:`filterNhanVienByTenureBin(${b.min},${b.max},'${escAttr(b.label)}')` })), "var(--honey-deep)")}
     </div>
     <div class="ov-card">
       <div class="ov-card-head"><h3>Sắp sinh nhật (${BIRTHDAY_WINDOW_DAYS_OV} ngày tới)</h3><span>Bấm vào 1 người để xem chi tiết</span></div>
