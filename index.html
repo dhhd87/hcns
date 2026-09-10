@@ -1085,7 +1085,7 @@ async function apiGet(action, params, timeoutMs){
     err.isNetworkError = true;
     throw err;
   }
-  const qs = Object.entries({ ...params, action })
+  const qs = Object.entries({ ...params, action, token: getSessionToken() })
     .filter(([,v])=> v!=null)
     .map(([k,v])=> `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
     .join("&");
@@ -1118,8 +1118,12 @@ async function apiPost(body, timeoutMs){
   const controller = new AbortController();
   const timer = setTimeout(()=>controller.abort(), timeoutMs || 25000);
   let resp;
+  // BẢO MẬT: tự động đính kèm token phiên đăng nhập (nếu chưa có sẵn trong body)
+  // vào mọi request POST, để backend xác định đúng người thực hiện thay vì tin
+  // theo mail do trình duyệt tự khai (xem giải thích trong app.gs).
+  const bodyWithToken = (body && body.token == null) ? { ...body, token: getSessionToken() } : body;
   try{
-    resp = await fetch(API_URL, { method:"POST", body: JSON.stringify(body), signal: controller.signal });
+    resp = await fetch(API_URL, { method:"POST", body: JSON.stringify(bodyWithToken), signal: controller.signal });
   }catch(e){
     const err = new Error(e.name === "AbortError"
       ? "Yêu cầu quá thời gian chờ (server không phản hồi). Vui lòng thử lại."
@@ -1144,6 +1148,18 @@ const SESSION_KEY = "hcns_user_session";
 function getSession(){ try{ return JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null"); }catch(e){ return null; } }
 function setSession(u){ try{ sessionStorage.setItem(SESSION_KEY, JSON.stringify(u)); }catch(e){} }
 function clearSession(){ try{ sessionStorage.removeItem(SESSION_KEY); }catch(e){} }
+/* BẢO MẬT: token phiên đăng nhập do server cấp lúc đăng nhập thành công (xem
+   _createSessionToken trong app.gs) — bắt buộc gửi kèm MỌI request đọc/ghi dữ
+   liệu. Trước đây API vẫn phục vụ list/get cho bất kỳ ai gọi thẳng link /exec
+   mà không cần đăng nhập; nay thiếu/sai token sẽ bị server từ chối. */
+function getSessionToken(){ const u = getSession(); return (u && u.token) || ""; }
+/* Token hết hạn (phiên CacheService tối đa 6 giờ) hoặc bị server huỷ -> đưa
+   người dùng quay lại màn hình đăng nhập, không cố âm thầm sửa lỗi tại chỗ. */
+function handleSessionExpired(msg){
+  clearSession();
+  toast(msg || "Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại.", true);
+  setTimeout(()=> location.reload(), 1200);
+}
 
 function showLoginScreen(){
   document.getElementById("loginScreen").classList.remove("hide");
@@ -1161,7 +1177,10 @@ function renderSidebarUser(){
   el.innerHTML = u ? `<div style="color:#EDEFE6;font-weight:600;">${escHtml(u.ten || u.mail)} <span style="font-weight:400;color:#9FB398;">(${escHtml(u.vai_tro||"—")})</span></div>
     <a href="javascript:void(0)" onclick="logout()" style="color:#B9C6B3;text-decoration:underline;">Đăng xuất</a>` : "";
 }
-function logout(){ clearSession(); location.reload(); }
+function logout(){
+  const token = getSessionToken();
+  apiPost({ action:"logout", token }).catch(()=>{}).finally(()=>{ clearSession(); location.reload(); });
+}
 /* vai_tro "Admin" mới được Thêm/Sửa/Xoá; "User" chỉ xem. Kiểm tra lại phía server
    (xem _requireAdminRole trong app.gs) — ẩn nút ở đây chỉ để trải nghiệm gọn hơn. */
 function isAdmin(){
@@ -1178,13 +1197,18 @@ document.getElementById("loginForm").addEventListener("submit", async (e)=>{
   errEl.style.display = "none";
   btn.disabled = true; btn.textContent = "Đang đăng nhập...";
   try{
-    const json = await apiPost({ action:"login", mail, pass_word });
+    // Timeout riêng cho đăng nhập cao hơn mức mặc định (25s) vì đây thường là request
+    // ĐẦU TIÊN gửi tới Apps Script trong phiên -> dễ gặp cold-start chậm nhất, dù đã
+    // có bước "làm nóng" ở init() (xem giải thích ở apiGet("ping") trong init()).
+    const json = await apiPost({ action:"login", mail, pass_word }, 40000);
     if(!json.success) throw new Error(json.message || "Đăng nhập thất bại");
     setSession(json.data);
     hideLoginScreen();
     await startApp();
   }catch(err){
-    errEl.textContent = err.message;
+    errEl.textContent = err.isNetworkError
+      ? "Máy chủ phản hồi chậm (thường do Apps Script mới khởi động lại). Vui lòng bấm Đăng nhập thêm 1 lần nữa."
+      : err.message;
     errEl.style.display = "block";
   }finally{
     btn.disabled = false; btn.textContent = "Đăng nhập";
@@ -1305,6 +1329,8 @@ async function refreshSheetInBackground(sheet){
       if(currentSheet === sheet && !document.getElementById("formOverlay").classList.contains("show")){
         applyFilter(dataCache[sheet]);
       }
+    }else if(json.sessionError){
+      handleSessionExpired(json.message);
     }
   }catch(e){ /* lỗi mạng khi tải ngầm -> im lặng, vẫn dùng dữ liệu cache cũ */ }
   finally{ backgroundRefreshing.delete(sheet); }
@@ -1331,6 +1357,7 @@ async function apiList(sheet){
 async function apiListRemote(sheet, _isRetry){
   const json = await apiGet("list", { sheet, editPassword: getEditPassword() });
   if(!json.success){
+    if(json.sessionError){ handleSessionExpired(json.message); throw new Error(json.message || "Phiên đăng nhập đã hết hạn"); }
     if(json.authError && !_isRetry){
       const entered = promptEditPassword(json.message);
       if(entered) return apiListRemote(sheet, true);
@@ -1399,6 +1426,7 @@ async function apiWriteRemote(action, sheet, payload, _isRetry){
   if(payload && payload.data != null) body.data = payload.data;
   const json = await apiPost(body);
   if(!json.success){
+    if(json.sessionError){ handleSessionExpired(json.message); throw new Error(json.message || "Phiên đăng nhập đã hết hạn"); }
     if(json.roleError) throw new Error(json.message || "Bạn không có quyền thực hiện thao tác này");
     if(json.authError && !_isRetry){
       const entered = promptEditPassword(json.message);
@@ -2881,6 +2909,7 @@ async function apiUploadImage(file, _isRetry){
   const base64 = await fileToBase64(resized);
   const json = await apiPost({ action:"uploadimage", filename: resized.name, mimeType: resized.type, base64, editPassword: getEditPassword(), mail: (getSession()||{}).mail || "" });
   if(!json.success){
+    if(json.sessionError){ handleSessionExpired(json.message); throw new Error(json.message || "Phiên đăng nhập đã hết hạn"); }
     if(json.roleError) throw new Error(json.message || "Bạn không có quyền tải ảnh lên");
     if(json.authError && !_isRetry){
       const entered = promptEditPassword(json.message);
@@ -5113,7 +5142,16 @@ document.addEventListener("keydown", (e)=>{
 /* ---------- khởi động ---------- */
 (async function init(){
   const session = getSession();
-  if(!session){ showLoginScreen(); return; }
+  if(!session){
+    showLoginScreen();
+    // "Làm nóng" Apps Script NGAY khi hiện màn hình đăng nhập (trong lúc người dùng
+    // đang gõ email/mật khẩu) thay vì chỉ sau khi đăng nhập xong. Apps Script có độ
+    // trễ "cold start" khá lớn (có thể 10-20s+) cho request đầu tiên sau một lúc
+    // không ai dùng -> nếu không làm nóng trước, chính request "login" sẽ phải gánh
+    // toàn bộ độ trễ cold-start đó và dễ bị timeout. Gọi ngầm, bỏ qua lỗi (nếu có).
+    apiGet("ping", {}, 20000).catch(()=>{});
+    return;
+  }
   hideLoginScreen();
   await startApp();
 })();
