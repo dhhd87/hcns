@@ -1695,6 +1695,9 @@ function closeAllOverlays(){
 }
 
 let overviewTimer = null;
+let overviewBirthdayExpanded = false;
+const OV_BIRTHDAY_TOP_N = 6;
+function toggleOverviewBirthdayExpand(){ overviewBirthdayExpanded = !overviewBirthdayExpanded; renderOverview(); }
 async function switchSheet(key, filter){
   if(key === "nhat_ky" && !isAdmin()) key = "tong_quan"; // chỉ Admin được xem Nhật ký
   closeAllOverlays();
@@ -3480,11 +3483,14 @@ async function renderOverview(forceReload){
     </div>
     <div class="ov-card">
       <div class="ov-card-head"><h3>Sắp sinh nhật (${BIRTHDAY_WINDOW_DAYS_OV} ngày tới)</h3><span>Bấm vào 1 người để xem chi tiết</span></div>
-      ${upcomingBirthdays.length ? upcomingBirthdays.map(x => `
+      ${upcomingBirthdays.length ? (overviewBirthdayExpanded ? upcomingBirthdays : upcomingBirthdays.slice(0, OV_BIRTHDAY_TOP_N)).map(x => `
         <div class="ov-row" style="cursor:pointer;" onclick="openRecordPanel('nhan_vien','${escAttr(x.nv.nhanvien_ma)}')">
           <div class="ov-row-top"><span>${escHtml(x.nv.nhanvien_ten)}<span class="ov-arrow">→</span></span><span>${x.diff===0?'Hôm nay':(x.diff===1?'Ngày mai':`Còn ${x.diff} ngày`)}</span></div>
           <div class="muted" style="font-size:11.5px;">${escHtml(x.nv.ngay_sinh||"—")} · ${escHtml(x.nv.nhanvien_ma)}</div>
         </div>`).join("") : '<p class="muted">Không có ai sắp sinh nhật trong khoảng thời gian này</p>'}
+      ${upcomingBirthdays.length > OV_BIRTHDAY_TOP_N ? `<div style="text-align:center;margin-top:10px;">
+        <button class="btn btn-ghost btn-sm" onclick="toggleOverviewBirthdayExpand()">${overviewBirthdayExpanded ? "Thu gọn" : `Xem toàn bộ (${upcomingBirthdays.length})`}</button>
+      </div>` : ""}
     </div>
     <div class="ov-card" style="grid-column:1/-1;">
       <div class="ov-card-head"><h3>Chi phí sửa chữa theo tháng (12 tháng gần nhất)</h3><span>Tổng chi phí sửa chữa công cụ dụng cụ mỗi tháng</span></div>
