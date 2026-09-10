@@ -570,9 +570,7 @@
     <nav class="nav" id="nav"></nav>
     <div class="sidebar-foot">Đồng bộ trực tiếp với Google Sheet nội bộ
       <div style="margin-top:8px;" id="sidebarUserInfo"></div>
-      <div style="margin-top:6px;"><a href="javascript:void(0)" onclick="changeMyPassword()" style="color:#B9C6B3;text-decoration:underline;">Đổi mật khẩu đăng nhập</a></div>
-      <div style="margin-top:6px;"><a href="javascript:void(0)" onclick="promptEditPassword('Nhập mật khẩu chỉnh sửa (để trống nếu không cần):')" style="color:#B9C6B3;text-decoration:underline;">Đặt/đổi mật khẩu chỉnh sửa</a></div>
-      <div style="margin-top:4px;"><a href="javascript:void(0)" onclick="const n=window.prompt('Tên của bạn (hiển thị trong Nhật ký):', getActorName()); if(n!=null) setActorName(n.trim());" style="color:#B9C6B3;text-decoration:underline;">Đặt tên hiển thị trong Nhật ký</a></div>
+      <div style="margin-top:6px;"><a href="javascript:void(0)" onclick="openChangePasswordModal()" style="color:#B9C6B3;text-decoration:underline;">Đổi mật khẩu đăng nhập</a></div>
     </div>
   </aside>
   <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
@@ -739,6 +737,37 @@
   </div>
 </div>
 
+<!-- đổi mật khẩu đăng nhập -->
+<div class="overlay" id="changePwOverlay">
+  <div class="modal" style="max-width:380px;">
+    <div class="modal-head">
+      <h2>Đổi mật khẩu đăng nhập</h2>
+      <button class="modal-close" id="changePwClose">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div class="field full" style="margin-bottom:12px;">
+        <label>Mật khẩu hiện tại</label>
+        <input type="password" id="cpOld" autocomplete="current-password">
+      </div>
+      <div class="field full" style="margin-bottom:12px;">
+        <label>Mật khẩu mới</label>
+        <input type="password" id="cpNew" autocomplete="new-password">
+      </div>
+      <div class="field full">
+        <label>Nhập lại mật khẩu mới</label>
+        <input type="password" id="cpNew2" autocomplete="new-password">
+      </div>
+      <div id="cpError" class="login-error" style="display:none;margin-top:10px;"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" id="changePwCancel">Huỷ</button>
+      <button class="btn btn-primary" id="changePwSave">Lưu mật khẩu mới</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast-wrap"></div>
 
 <script>
@@ -787,8 +816,7 @@ const LABELS = {
   so_luot:"Số lượt đã nhận", lan_phat_gan_nhat:"Lần phát gần nhất",
   hoadon_url:"Hoá đơn (ảnh/URL)",
   nhatky_ma:"Mã nhật ký", thoigian:"Thời gian", nguoi_thuc_hien:"Người thực hiện",
-  hanh_dong:"Hành động", ma_ban_ghi:"Mã bản ghi", chi_tiet:"Chi tiết",
-  mail:"Email đăng nhập", ten:"Họ tên hiển thị", vai_tro:"Vai trò", pass_word:"Mật khẩu"
+  hanh_dong:"Hành động", ma_ban_ghi:"Mã bản ghi", chi_tiet:"Chi tiết"
 };
 /* nhãn riêng theo từng sheet, ưu tiên hơn nhãn dùng chung ở trên (tránh nhầm lẫn
    khi cùng 1 tên cột nhưng ý nghĩa khác nhau ở mỗi sheet, vd trang_thai) */
@@ -938,6 +966,10 @@ const CONFIG = {
     label:"Nhắc việc", desc:"Công cụ sắp hết bảo hành, nhân sự sắp hết hạn thử việc, thiếu ảnh đại diện",
     icon:iconBell(), isReminders:true, hideToolbar:true
   },
+  bao_cao: {
+    label:"Báo cáo thống kê", desc:"Thống kê nhân sự, công cụ dụng cụ, chi phí, quà tặng theo nhiều tiêu chí — xuất Excel/Word",
+    icon:iconReport(), isReports:true, hideToolbar:true
+  },
   nhat_ky: {
     label:"Nhật ký", desc:"Lịch sử Thêm/Sửa/Xoá trên toàn hệ thống (audit log)",
     icon:iconHistory(), pk:["nhatky_ma"], readOnly:true,
@@ -945,14 +977,6 @@ const CONFIG = {
     sections:[{title:"Chi tiết nhật ký", fields:["nhatky_ma","thoigian","nguoi_thuc_hien","hanh_dong","sheet","ma_ban_ghi","chi_tiet"]}],
     relations:{},
     filters:["hanh_dong","sheet"]
-  },
-  nguoi_dung: {
-    label:"Tài khoản đăng nhập", desc:"Quản lý tài khoản đăng nhập, vai trò và đặt lại mật khẩu (chỉ Admin)",
-    icon:iconKey(), pk:["mail"], adminOnly:true,
-    table:["mail","ten","vai_tro"],
-    sections:[{title:"Thông tin tài khoản", fields:["mail","ten","vai_tro","pass_word"]}],
-    relations:{},
-    filters:["vai_tro"]
   }
 };
 
@@ -970,7 +994,7 @@ function iconDocument(){return `<svg width="17" height="17" viewBox="0 0 24 24" 
 function iconReceipt(){return `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 2h12v19l-2.5-1.5L13 21l-2.5-1.5L8 21l-2-1.5z"/><path d="M9 7h6M9 11h6M9 15h4"/></svg>`;}
 function iconClock(){return `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>`;}
 function iconBell(){return `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>`;}
-function iconKey(){return `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="8" cy="15" r="4"/><path d="M10.5 12.5L20 3M16 7l3 3M13 10l2 2"/></svg>`;}
+function iconReport(){return `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 3h8a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M9 8h6M9 12h6M9 16h3"/></svg>`;}
 function iconUpload(){return `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21V8m0 0l-4 4m4-4l4 4"/><path d="M4 21h16"/></svg>`;}
 
 /* ================= MỤC 10: "TRUY CẬP GẦN ĐÂY" =================
@@ -1011,15 +1035,15 @@ const NAV_TREE = [
     { key:"giay_to", children:["bien_ban","hoa_don"] },
     { key:"qua_tang" }
   ]},
+  { section:"BÁO CÁO THỐNG KÊ", items:[
+    { key:"bao_cao" }
+  ]},
   { section:"NHẮC VIỆC & NHẬT KÝ", items:[
     { key:"nhac_viec" },
     { key:"nhat_ky" }
-  ]},
-  { section:"QUẢN TRỊ", items:[
-    { key:"nguoi_dung" }
   ]}
 ];
-let expandedGroups = new Set(["cong_cu"]);
+let expandedGroups = new Set();
 let countsCache = {};
 
 /* các sheet có khoá chính đơn -> tự sinh mã nối tiếp khi thêm mới, không cho sửa tay */
@@ -1138,31 +1162,6 @@ function renderSidebarUser(){
     <a href="javascript:void(0)" onclick="logout()" style="color:#B9C6B3;text-decoration:underline;">Đăng xuất</a>` : "";
 }
 function logout(){ clearSession(); location.reload(); }
-
-/* ================= ĐỔI MẬT KHẨU ĐĂNG NHẬP (tự phục vụ) =================
-   Bất kỳ ai đã đăng nhập đều đổi được mật khẩu của chính mình (cần đúng mật
-   khẩu hiện tại). Muốn ĐẶT LẠI mật khẩu cho người khác (quên mật khẩu): tài
-   khoản Admin vào mục "Tài khoản đăng nhập" ở menu, sửa bản ghi tương ứng và
-   nhập mật khẩu mới vào ô "Mật khẩu" (để trống nếu không muốn đổi). */
-async function changeMyPassword(){
-  const session = getSession();
-  if(!session || !session.mail){ toast("Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại.", true); return; }
-  const oldPw = window.prompt("Nhập mật khẩu đăng nhập HIỆN TẠI:");
-  if(oldPw == null) return;
-  const newPw = window.prompt("Nhập mật khẩu MỚI (tối thiểu 4 ký tự):");
-  if(newPw == null) return;
-  if(newPw.length < 4){ toast("Mật khẩu mới phải có ít nhất 4 ký tự.", true); return; }
-  const confirmPw = window.prompt("Nhập lại mật khẩu MỚI để xác nhận:");
-  if(confirmPw == null) return;
-  if(confirmPw !== newPw){ toast("Xác nhận mật khẩu không khớp, vui lòng thử lại.", true); return; }
-  try{
-    const json = await apiPost({ action:"changepassword", mail: session.mail, oldPassword: oldPw, newPassword: newPw });
-    if(!json.success) throw new Error(json.message || "Đổi mật khẩu thất bại");
-    toast("Đã đổi mật khẩu thành công. Lần đăng nhập sau vui lòng dùng mật khẩu mới.");
-  }catch(err){
-    toast("Đổi mật khẩu thất bại: " + err.message, true);
-  }
-}
 /* vai_tro "Admin" mới được Thêm/Sửa/Xoá; "User" chỉ xem. Kiểm tra lại phía server
    (xem _requireAdminRole trong app.gs) — ẩn nút ở đây chỉ để trải nghiệm gọn hơn. */
 function isAdmin(){
@@ -1205,9 +1204,53 @@ function promptEditPassword(message){
   return pw != null;
 }
 
-/* ---------- tên người thao tác (ghi vào Nhật ký/audit log, Nhóm C.12) ---------- */
-function getActorName(){ return localStorage.getItem("hcns_actor_name") || ""; }
-function setActorName(n){ localStorage.setItem("hcns_actor_name", n || ""); }
+/* ---------- tên người thao tác (ghi vào Nhật ký/audit log, Nhóm C.12) ----------
+   Luôn lấy đúng tên (hoặc email nếu chưa có tên) của TÀI KHOẢN ĐANG ĐĂNG NHẬP, không
+   cho nhập tay tuỳ ý nữa — đảm bảo Nhật ký phản ánh đúng người thực hiện thao tác. */
+function getActorName(){
+  const u = getSession();
+  return (u && (u.ten || u.mail)) || "";
+}
+
+/* ================= ĐỔI MẬT KHẨU ĐĂNG NHẬP =================
+   Cho phép tài khoản đang đăng nhập (User lẫn Admin) tự đổi mật khẩu của chính
+   mình, yêu cầu nhập đúng mật khẩu hiện tại. Gọi action "changepassword" (khác
+   với EDIT_PASSWORD/khoá chỉnh sửa dữ liệu — 2 khái niệm độc lập nhau). */
+function openChangePasswordModal(){
+  document.getElementById("cpOld").value = "";
+  document.getElementById("cpNew").value = "";
+  document.getElementById("cpNew2").value = "";
+  document.getElementById("cpError").style.display = "none";
+  pushOverlay("changePwOverlay");
+  document.getElementById("changePwOverlay").classList.add("show");
+}
+function closeChangePasswordModal(){ popOverlay("changePwOverlay"); document.getElementById("changePwOverlay").classList.remove("show"); }
+document.getElementById("changePwClose").onclick = closeChangePasswordModal;
+document.getElementById("changePwCancel").onclick = closeChangePasswordModal;
+setupOverlayOutsideClick("changePwOverlay", closeChangePasswordModal);
+document.getElementById("changePwSave").onclick = async ()=>{
+  const oldPw = document.getElementById("cpOld").value;
+  const newPw = document.getElementById("cpNew").value;
+  const newPw2 = document.getElementById("cpNew2").value;
+  const errEl = document.getElementById("cpError");
+  errEl.style.display = "none";
+  if(!oldPw || !newPw){ errEl.textContent = "Vui lòng nhập đầy đủ mật khẩu hiện tại và mật khẩu mới."; errEl.style.display = "block"; return; }
+  if(newPw !== newPw2){ errEl.textContent = "Mật khẩu mới nhập lại không khớp."; errEl.style.display = "block"; return; }
+  if(newPw.length < 4){ errEl.textContent = "Mật khẩu mới phải có ít nhất 4 ký tự."; errEl.style.display = "block"; return; }
+  const btn = document.getElementById("changePwSave");
+  btn.disabled = true; btn.textContent = "Đang lưu...";
+  try{
+    const mail = (getSession()||{}).mail || "";
+    const json = await apiPost({ action:"changepassword", mail, old_pass_word: oldPw, new_pass_word: newPw });
+    if(!json.success) throw new Error(json.message || "Đổi mật khẩu thất bại");
+    toast("Đã đổi mật khẩu thành công");
+    closeChangePasswordModal();
+  }catch(err){
+    errEl.textContent = err.message; errEl.style.display = "block";
+  }finally{
+    btn.disabled = false; btn.textContent = "Lưu mật khẩu mới";
+  }
+};
 
 /* ---------- helpers gọi API ---------- */
 /* Chỉ mục tìm kiếm dạng chuỗi (gộp mọi giá trị của 1 dòng, viết thường) được
@@ -1296,42 +1339,6 @@ async function apiListRemote(sheet, _isRetry){
   }
   return json;
 }
-/* Tải NHIỀU sheet trong 1 LƯỢT GỌI MẠNG duy nhất (action=listmulti), thay vì
-   mỗi sheet 1 round-trip riêng (apiList từng cái). Mỗi round-trip tới Apps
-   Script đều có độ trễ khởi tạo riêng (mở Spreadsheet, xác thực...) nên gộp
-   lại giúp giảm đáng kể tổng thời gian chờ ở những màn hình cần nhiều sheet
-   cùng lúc (vd Tổng quan cần 7 sheet). Sheet nào đã có sẵn trong dataCache
-   hoặc trong localStorage (SWR) thì dùng luôn, không tính vào lượt gọi gộp. */
-async function apiListMulti(sheets){
-  const need = sheets.filter(s=>!dataCache[s]);
-  if(!need.length) return;
-  const toFetch = [];
-  need.forEach(s=>{
-    const local = loadLocalCache(s);
-    if(local && local.rows.length){
-      dataCache[s] = attachSearchIndex(local.rows);
-      refreshSheetInBackground(s);
-    }else{
-      toFetch.push(s);
-    }
-  });
-  if(!toFetch.length) return;
-  try{
-    const json = await apiGet("listmulti", { sheets: toFetch.join(","), editPassword: getEditPassword() });
-    if(json.success){
-      Object.entries(json.data).forEach(([s, res])=>{
-        if(res && res.rows){
-          dataCache[s] = attachSearchIndex(res.rows);
-          saveLocalCache(s, res.rows);
-        }
-        // res.error (vd authError sheet PII chưa nhập mật khẩu) -> bỏ qua, để
-        // apiList(sheet) gọi lại riêng lẻ như cũ khi thực sự cần tới sheet đó
-        // (sẽ tự hỏi lại mật khẩu đúng theo luồng authError sẵn có).
-      });
-    }
-  }catch(e){ /* lỗi mạng -> bỏ qua, apiList() từng sheet sẽ tự tải lại khi cần */ }
-}
-
 /* Sinh mã kế tiếp HOÀN TOÀN Ở PHÍA TRÌNH DUYỆT, không gọi server (action=nextcode
    trước đây phải chờ round-trip mạng mỗi lần bấm "Thêm mới"). Vì mọi màn hình đều
    đã gọi apiList(sheet) để tải dữ liệu trước khi mở form, danh sách bản ghi cần
@@ -1595,18 +1602,20 @@ function buildNav(){
   nav.innerHTML = "";
 
   NAV_TREE.forEach(sectionDef=>{
-    const visibleItems = sectionDef.items.filter(it => !(CONFIG[it.key] && CONFIG[it.key].adminOnly) || isAdmin());
-    if(!visibleItems.length) return; // cả mục trong nhóm đều bị ẩn (vd không phải Admin) -> ẩn luôn tiêu đề nhóm
-
     const secLabel = document.createElement("div");
     secLabel.className = "nav-group-label";
     secLabel.textContent = sectionDef.section;
     nav.appendChild(secLabel);
 
-    visibleItems.forEach(itemDef=>{
+    sectionDef.items.forEach(itemDef=>{
       const key = itemDef.key;
+      // Nhật ký (audit log): chỉ tài khoản Admin mới thấy mục này trên menu.
+      if(key === "nhat_ky" && !isAdmin()) return;
       const cfg = CONFIG[key];
-      const hasChildren = !!(itemDef.children && itemDef.children.length);
+      // Nhánh con của "Công cụ dụng cụ" (Danh mục, Danh mục chi tiết, Thuộc tính kỹ
+      // thuật, Lịch sử công cụ): chỉ Admin mới thấy mũi tên/mở được các mục con này.
+      const childrenAllowed = key !== "cong_cu" || isAdmin();
+      const hasChildren = !!(itemDef.children && itemDef.children.length) && childrenAllowed;
       const isExpanded = expandedGroups.has(key);
       const countVal = countsCache[key] != null ? countsCache[key] : "";
 
@@ -1660,44 +1669,34 @@ function buildNav(){
   }
 }
 async function refreshCounts(){
-  // Trước đây gọi apiList() (tải TOÀN BỘ dữ liệu) cho từng sheet chỉ để đếm
-  // số dòng -> đây là nguyên nhân chính gây chậm lúc mới đăng nhập (cả chục
-  // round-trip song song, mỗi round-trip lại kéo hết dữ liệu về). Nay dùng
-  // action=counts: 1 LƯỢT GỌI DUY NHẤT, phía server chỉ đọc getLastRow() cho
-  // mỗi sheet (không đọc nội dung từng ô) -> nhanh hơn rất nhiều.
+  // Chạy song song thay vì tuần tự (for...await) -> tải 1 loạt sheet cùng lúc
+  // khi khởi động, số đếm ở sidebar hiện ra nhanh hơn nhiều thay vì phải chờ
+  // hết sheet này đến sheet khác (mỗi round-trip Apps Script có độ trễ riêng).
   const keys = Object.keys(CONFIG).filter(key =>
     !CONFIG[key].isOverview && !CONFIG[key].isGroup && !CONFIG[key].isBienBan && !CONFIG[key].isHoaDon && !CONFIG[key].isReminders
   );
-  if(!keys.length) return;
-  try{
-    const json = await apiGet("counts", { sheets: keys.join(",") });
-    if(json.success){
-      keys.forEach(key=>{
-        const n = json.data[key];
-        if(n == null) return;
-        countsCache[key] = n;
-        const el = document.querySelector(`[data-count="${key}"]`);
-        if(el) el.textContent = n;
-      });
-    }
-  }catch(e){ /* lỗi mạng -> giữ nguyên số đếm cũ (nếu có), không chặn app */ }
+  await Promise.all(keys.map(async key => {
+    try{
+      const rows = await apiList(key);
+      countsCache[key] = rows.length;
+      const el = document.querySelector(`[data-count="${key}"]`);
+      if(el) el.textContent = rows.length;
+    }catch(e){ /* ignore silently for count */ }
+  }));
 }
 
 /* Đóng hết mọi overlay đang mở (form thêm/sửa, panel chi tiết, xem hoá đơn,
    picker...) khi người dùng bấm sang mục menu khác. Trước đây các overlay này
    không tự đóng khi chuyển trang -> ở lại "nổi" đè lên nội dung mục mới. */
 function closeAllOverlays(){
-  ["formOverlay","detailOverlay","confirmOverlay","sidePanelOverlay","invoiceOverlay","assetPickOverlay","relPickOverlay"]
+  ["formOverlay","detailOverlay","confirmOverlay","sidePanelOverlay","invoiceOverlay","assetPickOverlay","relPickOverlay","changePwOverlay"]
     .forEach(id=>{ const el = document.getElementById(id); if(el) el.classList.remove("show"); });
   overlayStack = [];
 }
 
 let overviewTimer = null;
 async function switchSheet(key, filter){
-  if(CONFIG[key] && CONFIG[key].adminOnly && !isAdmin()){
-    toast("Chỉ tài khoản Admin mới xem được mục này.", true);
-    key = "tong_quan";
-  }
+  if(key === "nhat_ky" && !isAdmin()) key = "tong_quan"; // chỉ Admin được xem Nhật ký
   closeAllOverlays();
   pbReturnState = null; // rời khỏi ngữ cảnh "Nhân sự theo phòng ban" -> ẩn nút quay lại
   if(overviewTimer){ clearInterval(overviewTimer); overviewTimer = null; }
@@ -1725,7 +1724,7 @@ async function switchSheet(key, filter){
   document.querySelector(".ledger .foot-row").style.display = hideToolbar ? "none" : "flex";
   const canExport = !!(cfg.table || cfg.isHoaDon || cfg.isOverview);
   document.getElementById("exportBtn").style.display = canExport ? "inline-flex" : "none";
-  document.querySelector(".ledger").classList.toggle("plain", !!(cfg.isOverview || cfg.isReminders));
+  document.querySelector(".ledger").classList.toggle("plain", !!(cfg.isOverview || cfg.isReminders || cfg.isReports));
   if(cfg.isOverview){
     await renderOverview();
     overviewTimer = setInterval(()=> renderOverview(true), 5*60*1000);
@@ -1735,6 +1734,8 @@ async function switchSheet(key, filter){
     await renderHoaDon();
   }else if(cfg.isReminders){
     await renderReminders();
+  }else if(cfg.isReports){
+    await renderBaoCao();
   }else{
     await loadTable();
   }
@@ -2786,9 +2787,6 @@ const URL_FIELDS = new Set(["photo_url","hoadon_url"]);
 /* các trường link (ảnh đại diện, hoá đơn...) chỉ hiện ô nhập khi đang sửa,
    ở chế độ xem thì ẩn đi để tránh lộ link dài, rối giao diện */
 const HIDDEN_IN_VIEW_FIELDS = new Set(["photo_url","hoadon_url"]);
-/* trường mật khẩu (sheet nguoi_dung): KHÔNG BAO GIỜ hiện giá trị đã lưu (kể cả
-   dạng băm) ra màn hình — chỉ hiện ô nhập trống khi sửa, để trống = không đổi. */
-const PASSWORD_FIELDS = new Set(["pass_word"]);
 const DATE_FIELDS_HINT = f => f.startsWith("ngay_") || f==="han_bao_hanh";
 const NUMBER_FIELDS = new Set(["chi_phi_sua","gia_tri"]);
 /* chuyển link chia sẻ Google Drive (dạng .../file/d/ID/view) sang link ảnh xem trực tiếp,
@@ -3003,12 +3001,6 @@ async function openForm(id){
             ondblclick="openRelFieldPicker('${currentSheet}','${f}', this)">
           <span class="field-hint-dbl">Nháy đúp vào ô để chọn từ danh sách</span></div>`;
       }
-      if(PASSWORD_FIELDS.has(f)){
-        const hint = editingId ? "Để trống nếu không đổi mật khẩu" : "Bắt buộc nhập cho tài khoản mới";
-        return `<div class="field"><label>${L(f, currentSheet)}</label>
-          <input type="password" data-field="${f}" value="" autocomplete="new-password" placeholder="${hint}">
-          <span class="field-hint">${hint}</span></div>`;
-      }
       if(LONGTEXT_FIELDS.has(f)){
         return `<div class="field full"><label>${L(f, currentSheet)}</label><textarea data-field="${f}">${escHtml(val)}</textarea></div>`;
       }
@@ -3105,11 +3097,6 @@ function collectFormData(){
   body.querySelectorAll("[data-field]").forEach(el=>{
     data[el.dataset.field] = el.dataset.datefield ? isoToVn(el.value) : el.value.trim();
   });
-  // Mật khẩu để trống khi SỬA nghĩa là "không đổi" -> không gửi field này lên
-  // (nếu gửi chuỗi rỗng, backend sẽ ghi đè xoá mất mật khẩu đã có).
-  if(PASSWORD_FIELDS.size && editingId){
-    PASSWORD_FIELDS.forEach(f=>{ if(data[f] === "") delete data[f]; });
-  }
   return data;
 }
 
@@ -3125,7 +3112,6 @@ function doFormSave(){
   const data = collectFormData();
   const missingPk = cfg.pk.filter(f=>!data[f]);
   if(missingPk.length){ toast(`Vui lòng nhập ${missingPk.map(f=>L(f, sheet)).join(", ")}`, true); return; }
-  if(sheet === "nguoi_dung" && !editingId && !data.pass_word){ toast("Vui lòng nhập mật khẩu cho tài khoản mới", true); return; }
   const errors = validateRecordData(data, sheet);
   if(errors.length){ toast(errors.join(" · "), true); return; }
 
@@ -3246,11 +3232,6 @@ async function renderOverview(forceReload){
   if(forceReload){
     ["nhan_vien","phong_ban","cong_cu","lichsu_congcu","qua_tang"].forEach(s => invalidateSheetCache(s));
   }
-
-  // Gộp 7 sheet Tổng quan cần dùng vào 1 lượt gọi mạng duy nhất (thay vì 7
-  // round-trip riêng lẻ) — xem apiListMulti(). Sau bước này, các apiList()
-  // bên dưới hầu hết chỉ đọc từ dataCache (gần như tức thì).
-  await apiListMulti(["nhan_vien","phong_ban","cong_cu","lichsu_congcu","thongso_kythuat","qua_tang","danh_muc"]);
 
   const [nvRows, pbRows, ccRows, hisRows, specRowsOv, qtRows, dmAllRowsOv] = await Promise.all([
     apiList("nhan_vien"), apiList("phong_ban"), apiList("cong_cu"), apiList("lichsu_congcu"), apiList("thongso_kythuat"),
@@ -3795,6 +3776,400 @@ function openInvoiceImage(url){
   document.getElementById("invoiceOverlay").classList.add("show");
 }
 
+/* ================= BÁO CÁO THỐNG KÊ (nhiều tiêu chí) =================
+   Tính toán hoàn toàn ở trình duyệt dựa trên dữ liệu đã có trong dataCache/
+   apiList (không cần thêm API mới). Mỗi báo cáo trả về {columns, rows, total},
+   hiển thị dạng bảng + xuất được ra Excel (.xlsx, dùng thư viện SheetJS sẵn có)
+   và Word (.doc, dùng chuẩn HTML-in-Word — mở được trực tiếp bằng Microsoft
+   Word/WPS mà không cần thư viện docx phía trình duyệt). ===================== */
+const REPORTS = [
+  { key:"nv_theo_pb", label:"Nhân sự theo phòng ban", group:"Nhân sự" },
+  { key:"nv_theo_chucvu", label:"Nhân sự theo chức vụ", group:"Nhân sự" },
+  { key:"nv_theo_tinhtrang", label:"Nhân sự theo tình trạng làm việc", group:"Nhân sự" },
+  { key:"nv_theo_loaihinh", label:"Nhân sự theo loại hình lao động", group:"Nhân sự" },
+  { key:"nv_theo_gioitinh", label:"Nhân sự theo giới tính", group:"Nhân sự" },
+  { key:"nv_bien_dong", label:"Biến động nhân sự (tuyển mới/nghỉ việc) theo tháng", group:"Nhân sự", needsDateRange:true, dateHint:"Lọc theo Ngày thử việc (tuyển mới) / Ngày nghỉ việc" },
+  { key:"nv_thap_tuoi", label:"Tháp tuổi nhân sự", group:"Nhân sự" },
+  { key:"nv_thap_tham_nien", label:"Tháp thâm niên nhân sự", group:"Nhân sự" },
+  { key:"nv_ty_le_nghiviec", label:"Tỷ lệ nghỉ việc (turnover rate) theo quý", group:"Nhân sự", needsDateRange:true, dateHint:"Để trống = tự lấy 4 quý gần nhất. Mỗi quý: (Số nghỉ việc trong quý) / (Bình quân nhân sự đầu-cuối quý) × 100%" },
+  { key:"cc_theo_danhmuc", label:"Công cụ dụng cụ theo danh mục thiết bị", group:"Công cụ dụng cụ" },
+  { key:"cc_theo_pb", label:"Công cụ dụng cụ theo phòng ban đang giữ", group:"Công cụ dụng cụ" },
+  { key:"cc_giatri_theo_pb", label:"Tổng giá trị tài sản theo phòng ban", group:"Công cụ dụng cụ" },
+  { key:"chiphi_sua_theo_thang", label:"Chi phí sửa chữa theo tháng", group:"Chi phí sửa chữa", needsDateRange:true, dateHint:"Lọc theo Ngày sửa" },
+  { key:"chiphi_sua_theo_cc", label:"Chi phí sửa chữa theo công cụ", group:"Chi phí sửa chữa", needsDateRange:true, dateHint:"Lọc theo Ngày sửa" },
+  { key:"quatang_theo_loai", label:"Quà tặng/Đồng phục theo loại", group:"Quà tặng/Đồng phục" },
+  { key:"quatang_theo_pb", label:"Quà tặng/Đồng phục theo phòng ban", group:"Quà tặng/Đồng phục" }
+];
+
+/* ---------- tiện ích tính theo QUÝ (dùng cho báo cáo Tỷ lệ nghỉ việc) ---------- */
+function quarterBoundsFE(year, q){
+  const startMonth = (q-1)*3;
+  const start = new Date(year, startMonth, 1);
+  const end = new Date(year, startMonth+3, 0); // ngày cuối cùng của quý
+  end.setHours(23,59,59,999);
+  return { start, end };
+}
+function listQuartersInRange(fromIso, toIso){
+  const now = new Date();
+  const toDate = toIso ? new Date(toIso) : now;
+  const fromDate = fromIso ? new Date(fromIso) : new Date(toDate.getFullYear()-1, toDate.getMonth(), 1); // mặc định ~4 quý gần nhất
+  const quarters = [];
+  let y = fromDate.getFullYear(), q = Math.floor(fromDate.getMonth()/3)+1;
+  const toY = toDate.getFullYear(), toQ = Math.floor(toDate.getMonth()/3)+1;
+  let guard = 0;
+  while((y < toY || (y===toY && q<=toQ)) && guard < 40){
+    quarters.push({ year:y, q });
+    q++; if(q>4){ q=1; y++; }
+    guard++;
+  }
+  return quarters;
+}
+function reportDateOk(iso, from, to){
+  if(!iso) return false;
+  if(from && iso < from) return false;
+  if(to && iso > to) return false;
+  return true;
+}
+async function computeReport(key, filters){
+  filters = filters || {};
+  const { from, to } = filters;
+  const pbRows = await apiList("phong_ban");
+  const pbName = {}; pbRows.forEach(p=>{ pbName[p.phongban_ma] = p.phongban_ten; });
+  const sortDesc = (map)=> Object.entries(map).sort((a,b)=>b[1]-a[1]);
+
+  if(key === "nv_theo_pb"){
+    const nvRows = await apiList("nhan_vien");
+    const map = {}; nvRows.forEach(nv=>{ const k=nv.phongban_ma||"—"; map[k]=(map[k]||0)+1; });
+    return { columns:["Phòng ban","Số nhân sự"], rows: sortDesc(map).map(([k,v])=>[pbName[k]||k, v]), total: nvRows.length };
+  }
+  if(key === "nv_theo_chucvu"){
+    const nvRows = await apiList("nhan_vien");
+    const map = {}; nvRows.forEach(nv=>{ const k=nv.chuc_vu||"—"; map[k]=(map[k]||0)+1; });
+    return { columns:["Chức vụ","Số nhân sự"], rows: sortDesc(map), total: nvRows.length };
+  }
+  if(key === "nv_theo_tinhtrang"){
+    const nvRows = await apiList("nhan_vien");
+    const map = {}; nvRows.forEach(nv=>{ const k=nv.tinh_trang||"—"; map[k]=(map[k]||0)+1; });
+    return { columns:["Tình trạng làm việc","Số nhân sự"], rows: sortDesc(map), total: nvRows.length };
+  }
+  if(key === "nv_theo_loaihinh"){
+    const nvRows = await apiList("nhan_vien");
+    const map = {}; nvRows.forEach(nv=>{ const k=nv.trang_thai||"—"; map[k]=(map[k]||0)+1; });
+    return { columns:["Loại hình lao động","Số nhân sự"], rows: sortDesc(map), total: nvRows.length };
+  }
+  if(key === "nv_theo_gioitinh"){
+    const nvRows = await apiList("nhan_vien");
+    const map = {}; nvRows.forEach(nv=>{ const k=nv.gioi_tinh||"—"; map[k]=(map[k]||0)+1; });
+    return { columns:["Giới tính","Số nhân sự"], rows: sortDesc(map), total: nvRows.length };
+  }
+  if(key === "nv_bien_dong"){
+    const nvRows = await apiList("nhan_vien");
+    const monthMap = {};
+    nvRows.forEach(nv=>{
+      if(reportDateOk(vnToIso(nv.ngay_thu_viec), from, to)){
+        const mk = vnDateMonthKey(nv.ngay_thu_viec);
+        if(mk){ monthMap[mk] = monthMap[mk] || {vao:0, ra:0}; monthMap[mk].vao++; }
+      }
+      if(reportDateOk(vnToIso(nv.ngay_nghi_viec), from, to)){
+        const mk = vnDateMonthKey(nv.ngay_nghi_viec);
+        if(mk){ monthMap[mk] = monthMap[mk] || {vao:0, ra:0}; monthMap[mk].ra++; }
+      }
+    });
+    const rows = Object.keys(monthMap).sort().map(mk=>[mk, monthMap[mk].vao, monthMap[mk].ra]);
+    const total = rows.reduce((s,r)=>s+r[1]+r[2],0);
+    return { columns:["Tháng","Vào làm","Nghỉ việc"], rows, total };
+  }
+  if(key === "nv_thap_tuoi"){
+    const nvRows = (await apiList("nhan_vien")).filter(nv => String(nv.tinh_trang||"").toLowerCase().includes("đang"));
+    const bins = [
+      { label:"Dưới 25", min:0, max:24 },
+      { label:"25 - 30", min:25, max:30 },
+      { label:"31 - 35", min:31, max:35 },
+      { label:"36 - 40", min:36, max:40 },
+      { label:"41 - 45", min:41, max:45 },
+      { label:"46 - 50", min:46, max:50 },
+      { label:"Trên 50", min:51, max:999 }
+    ];
+    const today = new Date();
+    const counts = bins.map(()=>({ nam:0, nu:0, khac:0 }));
+    let unknown = 0;
+    nvRows.forEach(nv=>{
+      const d = _parseVnDateFE(nv.ngay_sinh);
+      if(!d){ unknown++; return; }
+      let age = today.getFullYear() - d.getFullYear();
+      if(today.getMonth() < d.getMonth() || (today.getMonth()===d.getMonth() && today.getDate() < d.getDate())) age--;
+      const idx = bins.findIndex(b => age>=b.min && age<=b.max);
+      if(idx < 0) return;
+      const gt = String(nv.gioi_tinh||"").toLowerCase();
+      if(gt.includes("nam")) counts[idx].nam++;
+      else if(gt.includes("nữ") || gt.includes("nu")) counts[idx].nu++;
+      else counts[idx].khac++;
+    });
+    const rows = bins.map((b,i)=>[b.label, counts[i].nam, counts[i].nu, counts[i].khac, counts[i].nam+counts[i].nu+counts[i].khac]);
+    if(unknown) rows.push(["Không rõ ngày sinh", "—", "—", "—", unknown]);
+    return { columns:["Nhóm tuổi","Nam","Nữ","Khác/Chưa rõ","Tổng"], rows, total: nvRows.length };
+  }
+  if(key === "nv_thap_tham_nien"){
+    const nvRows = (await apiList("nhan_vien")).filter(nv => String(nv.tinh_trang||"").toLowerCase().includes("đang"));
+    const bins = [
+      { label:"Dưới 1 năm", min:0, max:0.999 },
+      { label:"1 - 3 năm", min:1, max:2.999 },
+      { label:"3 - 5 năm", min:3, max:4.999 },
+      { label:"5 - 10 năm", min:5, max:9.999 },
+      { label:"Trên 10 năm", min:10, max:999 }
+    ];
+    const today = new Date();
+    const counts = bins.map(()=>0);
+    let unknown = 0;
+    nvRows.forEach(nv=>{
+      const d = _parseVnDateFE(nv.ngay_thu_viec);
+      if(!d){ unknown++; return; }
+      const years = (today - d) / (365.25*86400000);
+      const idx = bins.findIndex(b => years>=b.min && years<=b.max);
+      if(idx>=0) counts[idx]++;
+    });
+    const rows = bins.map((b,i)=>[b.label, counts[i]]);
+    if(unknown) rows.push(["Không rõ ngày thử việc", unknown]);
+    return { columns:["Nhóm thâm niên","Số nhân sự"], rows, total: nvRows.length };
+  }
+  if(key === "nv_ty_le_nghiviec"){
+    const nvRows = await apiList("nhan_vien");
+    const quarters = listQuartersInRange(from, to);
+    const countActiveAt = (d) => nvRows.filter(nv=>{
+      const start = _parseVnDateFE(nv.ngay_thu_viec);
+      if(!start || start > d) return false;
+      const end = _parseVnDateFE(nv.ngay_nghi_viec);
+      return !end || end > d;
+    }).length;
+    const rows = quarters.map(({year,q})=>{
+      const { start, end } = quarterBoundsFE(year, q);
+      const dauKy = countActiveAt(start);
+      const cuoiKy = countActiveAt(end);
+      const nghiTrongKy = nvRows.filter(nv=>{
+        const d = _parseVnDateFE(nv.ngay_nghi_viec);
+        return d && d>=start && d<=end;
+      }).length;
+      const binhQuan = (dauKy+cuoiKy)/2;
+      const tyLe = binhQuan>0 ? (nghiTrongKy/binhQuan*100) : 0;
+      return [`Quý ${q}/${year}`, dauKy, cuoiKy, nghiTrongKy, tyLe.toFixed(1)+"%"];
+    });
+    const totalNghi = rows.reduce((s,r)=>s+r[3], 0);
+    return { columns:["Quý","Nhân sự đầu kỳ","Nhân sự cuối kỳ","Số nghỉ việc","Tỷ lệ nghỉ việc"], rows, total: totalNghi };
+  }
+  if(key === "cc_theo_danhmuc"){
+    const [ccRows, dmRows] = await Promise.all([apiList("cong_cu"), apiList("danhmuc_chitiet")]);
+    const dmName = {}; dmRows.forEach(d=>{ dmName[d.danh_muc_ma] = d.danh_muc_ten; });
+    const map = {}; ccRows.forEach(c=>{ const k=c.danh_muc_ma||"—"; map[k]=(map[k]||0)+1; });
+    return { columns:["Danh mục thiết bị","Số lượng"], rows: sortDesc(map).map(([k,v])=>[dmName[k]||k, v]), total: ccRows.length };
+  }
+  if(key === "cc_theo_pb"){
+    const [ccRows, nvRows] = await Promise.all([apiList("cong_cu"), apiList("nhan_vien")]);
+    const nvByMa = {}; nvRows.forEach(n=>{ nvByMa[n.nhanvien_ma] = n; });
+    const map = {}; ccRows.forEach(c=>{ const nv=nvByMa[c.nhanvien_ma]; const k=nv?(nv.phongban_ma||"—"):"—"; map[k]=(map[k]||0)+1; });
+    return { columns:["Phòng ban","Số công cụ"], rows: sortDesc(map).map(([k,v])=>[pbName[k]||k, v]), total: ccRows.length };
+  }
+  if(key === "cc_giatri_theo_pb"){
+    const [ccRows, nvRows] = await Promise.all([apiList("cong_cu"), apiList("nhan_vien")]);
+    const nvByMa = {}; nvRows.forEach(n=>{ nvByMa[n.nhanvien_ma] = n; });
+    const map = {};
+    ccRows.forEach(c=>{
+      const nv = nvByMa[c.nhanvien_ma]; const k = nv?(nv.phongban_ma||"—"):"—";
+      const gt = Number(String(c.gia_tri||"").replace(/[^\d.-]/g,"")) || 0;
+      map[k] = (map[k]||0) + gt;
+    });
+    const total = Object.values(map).reduce((s,v)=>s+v,0);
+    return { columns:["Phòng ban","Tổng giá trị tài sản (VNĐ)"], rows: sortDesc(map).map(([k,v])=>[pbName[k]||k, formatNumber(v)]), total: formatNumber(total) };
+  }
+  if(key === "chiphi_sua_theo_thang"){
+    const hisRows = await apiList("lichsu_congcu");
+    const map = {};
+    hisRows.forEach(h=>{
+      if(!reportDateOk(vnToIso(h.ngay_sua), from, to)) return;
+      const mk = vnDateMonthKey(h.ngay_sua); if(!mk) return;
+      const cp = Number(String(h.chi_phi_sua||"").replace(/[^\d.-]/g,"")) || 0;
+      map[mk] = (map[mk]||0) + cp;
+    });
+    const total = Object.values(map).reduce((s,v)=>s+v,0);
+    return { columns:["Tháng","Chi phí sửa (VNĐ)"], rows: Object.keys(map).sort().map(mk=>[mk, formatNumber(map[mk])]), total: formatNumber(total) };
+  }
+  if(key === "chiphi_sua_theo_cc"){
+    const [hisRows, ccRows, specRows] = await Promise.all([apiList("lichsu_congcu"), apiList("cong_cu"), apiList("thongso_kythuat")]);
+    const ccByMa = {}; ccRows.forEach(c=>{ ccByMa[c.cong_cu_ma] = c; });
+    const map = {};
+    hisRows.forEach(h=>{
+      if(!reportDateOk(vnToIso(h.ngay_sua), from, to)) return;
+      const cp = Number(String(h.chi_phi_sua||"").replace(/[^\d.-]/g,"")) || 0;
+      map[h.cong_cu_ma] = (map[h.cong_cu_ma]||0) + cp;
+    });
+    const total = Object.values(map).reduce((s,v)=>s+v,0);
+    const rows = sortDesc(map).map(([k,v])=>{
+      const cc = ccByMa[k]; const ten = cc ? computeCongCuTen(cc, specRows) : k;
+      return [ten, k, formatNumber(v)];
+    });
+    return { columns:["Tên công cụ","Mã công cụ","Tổng chi phí sửa (VNĐ)"], rows, total: formatNumber(total) };
+  }
+  if(key === "quatang_theo_loai"){
+    const [qtRows, dmRows] = await Promise.all([apiList("qua_tang"), apiList("danh_muc")]);
+    const dmName = {}; dmRows.forEach(d=>{ dmName[d.danh_muc_ma] = d.danh_muc_ten; });
+    const map = {}; qtRows.forEach(q=>{ const k=q.ma_qua_tang||"—"; map[k]=(map[k]||0)+1; });
+    return { columns:["Loại quà tặng/đồng phục","Số lượt phát"], rows: sortDesc(map).map(([k,v])=>[dmName[k]||k, v]), total: qtRows.length };
+  }
+  if(key === "quatang_theo_pb"){
+    const [qtRows, nvRows] = await Promise.all([apiList("qua_tang"), apiList("nhan_vien")]);
+    const nvByMa = {}; nvRows.forEach(n=>{ nvByMa[n.nhanvien_ma] = n; });
+    const map = {}; qtRows.forEach(q=>{ const nv=nvByMa[q.nhanvien_ma]; const k=nv?(nv.phongban_ma||"—"):"—"; map[k]=(map[k]||0)+1; });
+    return { columns:["Phòng ban","Số lượt phát"], rows: sortDesc(map).map(([k,v])=>[pbName[k]||k, v]), total: qtRows.length };
+  }
+  return { columns:[], rows:[], total:0 };
+}
+
+/* Xuất file Word (.doc) từ 1 bảng báo cáo, dùng chuẩn HTML-in-Word (mở trực
+   tiếp bằng Microsoft Word/WPS/LibreOffice) — không cần thư viện docx phía
+   trình duyệt, phù hợp môi trường chạy hoàn toàn client-side như app này. */
+function downloadWordReport(title, columns, rows, meta){
+  const theadHtml = `<tr>${columns.map(c=>`<th>${escHtml(c)}</th>`).join("")}</tr>`;
+  const tbodyHtml = rows.map(r=>`<tr>${r.map(v=>`<td>${escHtml(v)}</td>`).join("")}</tr>`).join("")
+    || `<tr><td colspan="${columns.length}" style="text-align:center;color:#888;">Không có dữ liệu</td></tr>`;
+  const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
+  <head><meta charset="utf-8"><title>${escHtml(title)}</title>
+  <style>
+    body{font-family:'Times New Roman',serif;font-size:13.5px;color:#1F2A20;}
+    h1{text-align:center;font-size:18px;color:#2B4635;margin-bottom:2px;}
+    .sub{text-align:center;color:#5D6B57;font-style:italic;margin-bottom:16px;}
+    table{border-collapse:collapse;width:100%;}
+    th,td{border:1px solid #888;padding:6px 10px;}
+    th{background:#E6EBDC;color:#2B4635;}
+    .meta{margin-top:16px;font-size:12.5px;color:#5D6B57;}
+  </style></head>
+  <body>
+    <h1>CỎ MỀM — HÀNH CHÍNH · NHÂN SỰ</h1>
+    <div class="sub">Báo cáo: ${escHtml(title)}${meta?.range ? " — " + escHtml(meta.range) : ""}</div>
+    <table><thead>${theadHtml}</thead><tbody>${tbodyHtml}</tbody></table>
+    <div class="meta">Tổng: ${escHtml(String(meta?.total ?? ""))} · Xuất lúc ${new Date().toLocaleString("vi-VN")} bởi ${escHtml(getActorName()||"—")}</div>
+  </body></html>`;
+  const blob = new Blob(["\ufeff", html], { type:"application/msword" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const stamp = new Date().toISOString().slice(0,19).replace(/[:T]/g,"-");
+  a.href = url; a.download = `bao_cao_${stamp}.doc`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 4000);
+}
+function exportReportExcel(title, columns, rows){
+  if(typeof XLSX === "undefined"){ toast("Không tải được thư viện xuất Excel.", true); return; }
+  const objRows = rows.map(r=>{ const o={}; columns.forEach((c,i)=>{ o[c]=r[i]; }); return o; });
+  const safeRows = sanitizeRowsForExcel(objRows);
+  const ws = XLSX.utils.json_to_sheet(safeRows);
+  ws['!cols'] = excelAutoFitCols(safeRows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, String(title).slice(0,31));
+  const stamp = new Date().toISOString().slice(0,19).replace(/[:T]/g,"-");
+  XLSX.writeFile(wb, `bao_cao_${stamp}.xlsx`);
+  toast("Đã xuất báo cáo Excel");
+}
+
+/* Xuất PDF thật (không phải .doc giả dạng Word) bằng cách nhờ backend Apps Script
+   dựng 1 Google Doc tạm rồi xuất sang PDF (DriveApp...getAs(MimeType.PDF)), xoá Doc
+   tạm ngay sau đó — xem _exportPdf()/_buildReportPdfBlob() trong Code.gs. */
+async function exportReportPdf(title, columns, rows, meta){
+  const btn = document.getElementById("rpExportPdf");
+  if(btn){ btn.disabled = true; btn.textContent = "Đang tạo PDF..."; }
+  try{
+    const json = await apiPost({ action:"exportpdf", title, columns, rows, meta: meta||{} }, 30000);
+    if(!json.success) throw new Error(json.message || "Xuất PDF thất bại");
+    const byteChars = atob(json.data.base64);
+    const byteNumbers = new Array(byteChars.length);
+    for(let i=0;i<byteChars.length;i++) byteNumbers[i] = byteChars.charCodeAt(i);
+    const blob = new Blob([new Uint8Array(byteNumbers)], { type:"application/pdf" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = json.data.filename || "bao_cao.pdf";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url), 4000);
+    toast("Đã xuất file PDF");
+  }catch(err){
+    toast("Xuất PDF thất bại: " + err.message, true);
+  }finally{
+    if(btn){ btn.disabled = false; btn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 3h7l4 4v14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v4h4"/></svg> Xuất PDF`; }
+  }
+}
+
+let currentReportData = null;
+async function runReport(){
+  const key = document.getElementById("rpType").value;
+  const rp = REPORTS.find(r=>r.key===key);
+  const from = rp.needsDateRange ? document.getElementById("rpFrom").value : "";
+  const to = rp.needsDateRange ? document.getElementById("rpTo").value : "";
+  const resultEl = document.getElementById("rpResult");
+  resultEl.innerHTML = `<div class="loading-row">Đang tính toán báo cáo…</div>`;
+  const data = await computeReport(key, { from, to });
+  currentReportData = { rp, data, range: rp.needsDateRange ? `${from||"..."} → ${to||"..."}` : null };
+  const maxVal = Math.max(1, ...data.rows.map(r=> Number(String(r[r.length-1]).replace(/[^\d.-]/g,"")) || 0));
+  const rowsHtml = data.rows.map(r=>{
+    const cells = r.map((v,i)=> i===0
+      ? `<td><b>${escHtml(v)}</b></td>`
+      : `<td>${escHtml(v)}${i===r.length-1?`<div class="ov-bar" style="margin-top:4px;max-width:160px;"><div class="ov-bar-fill" style="width:${Math.max(6,(Number(String(v).replace(/[^\d.-]/g,""))||0)/maxVal*100)}%"></div></div>`:""}</td>`
+    ).join("");
+    return `<tr>${cells}</tr>`;
+  }).join("");
+  resultEl.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin:4px 0 14px;">
+      <div style="font-size:13px;color:#5D6B57;">Tổng: <b>${escHtml(String(data.total))}</b> · ${data.rows.length} dòng dữ liệu</div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-ghost btn-sm" id="rpExportExcel">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v13m0 0l4-4m-4 4l-4-4"/><path d="M4 21h16"/></svg>
+          Xuất Excel</button>
+        <button class="btn btn-ghost btn-sm" id="rpExportWord">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 3h7l4 4v14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v4h4"/></svg>
+          Xuất Word</button>
+        <button class="btn btn-ghost btn-sm" id="rpExportPdf">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 3h7l4 4v14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v4h4"/></svg>
+          Xuất PDF</button>
+      </div>
+    </div>
+    <table class="mini-table"><thead><tr>${data.columns.map(c=>`<th>${escHtml(c)}</th>`).join("")}</tr></thead>
+    <tbody>${rowsHtml || `<tr><td colspan="${data.columns.length}" class="muted" style="text-align:center;padding:20px;">Không có dữ liệu phù hợp</td></tr>`}</tbody></table>
+  `;
+  document.getElementById("rpExportExcel").onclick = ()=> exportReportExcel(rp.label, data.columns, data.rows);
+  document.getElementById("rpExportWord").onclick = ()=> downloadWordReport(rp.label, data.columns, data.rows, { total: data.total, range: currentReportData.range });
+  document.getElementById("rpExportPdf").onclick = ()=> exportReportPdf(rp.label, data.columns, data.rows, { total: data.total, range: currentReportData.range });
+}
+
+async function renderBaoCao(){
+  const wrap = document.getElementById("tableWrap");
+  document.getElementById("rowInfo").textContent = "";
+  document.getElementById("pager").innerHTML = "";
+  const groups = [...new Set(REPORTS.map(r=>r.group))];
+  wrap.innerHTML = `
+    <div class="ov-card" style="margin-bottom:16px;">
+      <div class="field-grid">
+        <div class="field">
+          <label>Loại báo cáo</label>
+          <select id="rpType">
+            ${groups.map(g=>`<optgroup label="${escHtml(g)}">${REPORTS.filter(r=>r.group===g).map(r=>`<option value="${r.key}">${escHtml(r.label)}</option>`).join("")}</optgroup>`).join("")}
+          </select>
+        </div>
+        <div class="field" id="rpFromWrap" style="display:none;"><label>Từ ngày</label><input type="date" id="rpFrom"></div>
+        <div class="field" id="rpToWrap" style="display:none;"><label>Đến ngày</label><input type="date" id="rpTo"></div>
+      </div>
+      <p class="field-hint" id="rpHint" style="margin-top:8px;"></p>
+    </div>
+    <div class="ov-card"><div id="rpResult"><div class="loading-row">Đang tính toán báo cáo…</div></div></div>
+  `;
+  const typeEl = document.getElementById("rpType");
+  const syncDateVisibility = ()=>{
+    const rp = REPORTS.find(r=>r.key===typeEl.value);
+    document.getElementById("rpFromWrap").style.display = rp.needsDateRange ? "flex" : "none";
+    document.getElementById("rpToWrap").style.display = rp.needsDateRange ? "flex" : "none";
+    document.getElementById("rpHint").textContent = rp.needsDateRange ? (rp.dateHint || "Để trống = không giới hạn khoảng thời gian") : "";
+  };
+  typeEl.onchange = ()=>{ syncDateVisibility(); runReport(); };
+  syncDateVisibility();
+  document.getElementById("rpFrom").onchange = runReport;
+  document.getElementById("rpTo").onchange = runReport;
+  await runReport();
+}
+
 /* ---------- Nhóm C.11: Nhắc việc (công cụ sắp hết bảo hành, nhân sự sắp hết
    hạn thử việc, thiếu ảnh đại diện) — tính hoàn toàn phía trình duyệt dựa trên
    dữ liệu đã có (nhan_vien, lichsu_congcu, cong_cu), không cần thêm API. ---------- */
@@ -4169,9 +4544,6 @@ function switchSpTab(tab){
 }
 
 function spFieldView(f, val, sheet, relMaps){
-  if(PASSWORD_FIELDS.has(f)){
-    return `<div class="sp-field"><span class="k">${L(f, sheet)}</span><span class="v muted">••••••••</span></div>`;
-  }
   const autoInfo = findAutofillRelation(sheet, f);
   let display = (val!=null && val!=="") ? val : null;
   if(autoInfo){
@@ -4210,9 +4582,6 @@ function spFieldEdit(f, val, isPk, sheet){
       <span class="field-hint-dbl">Nháy đúp vào ô để chọn từ danh sách</span></div>`;
   }
   if(isPk) return `<div class="field"><label>${L(f, sheet)} <span class="field-hint">(khoá chính)</span></label><input type="text" value="${escAttr(val ?? "")}" readonly></div>`;
-  if(PASSWORD_FIELDS.has(f)) return `<div class="field"><label>${L(f, sheet)}</label>
-    <input type="password" data-spfield="${f}" value="" autocomplete="new-password" placeholder="Để trống nếu không đổi mật khẩu">
-    <span class="field-hint">Chỉ nhập nếu muốn ĐẶT LẠI mật khẩu đăng nhập cho tài khoản này</span></div>`;
   if(LONGTEXT_FIELDS.has(f)) return `<div class="field full"><label>${L(f, sheet)}</label><textarea data-spfield="${f}">${escHtml(val)}</textarea></div>`;
   if(URL_FIELDS.has(f)) return imageFieldBlockHtml("data-spfield", f, sheet, val, false);
   if(DATE_FIELDS_HINT(f)) return `<div class="field"><label>${L(f, sheet)}</label><input type="date" data-spfield="${f}" data-datefield="1" value="${vnToIso(val)}"></div>`;
@@ -4296,7 +4665,6 @@ function saveSpInfo(){
   body.querySelectorAll("[data-spfield]").forEach(el => {
     data[el.dataset.spfield] = el.dataset.datefield ? isoToVn(el.value) : el.value.trim();
   });
-  PASSWORD_FIELDS.forEach(f=>{ if(data[f] === "") delete data[f]; });
   const errors = validateRecordData(data, sheet);
   if(errors.length){ toast(errors.join(" · "), true); return; }
   queueOperation("update", sheet, id, data, ()=>{
@@ -4544,6 +4912,7 @@ document.addEventListener("keydown", (e)=>{
       else if(top === "invoiceOverlay"){ popOverlay("invoiceOverlay"); document.getElementById("invoiceOverlay").classList.remove("show"); }
       else if(top === "assetPickOverlay") closeAssetPicker();
       else if(top === "relPickOverlay") closeRelPicker();
+      else if(top === "changePwOverlay") closeChangePasswordModal();
       return;
     }
     if(isMobileView() && document.getElementById("sidebar").classList.contains("open")) setSidebarOpen(false);
