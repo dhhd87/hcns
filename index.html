@@ -2652,6 +2652,10 @@ async function exportListToExcel(){
       addSheet(overviewExportData.quaTangLoai, "Quà tặng - Đồng phục");
       addSheet(overviewExportData.chiPhiThang, "Chi phí sửa theo tháng");
       addSheet(overviewExportData.bienDongNhanSu, "Biến động NS theo tháng");
+      addSheet(overviewExportData.vungMienNhanSu, "Vùng miền");
+      addSheet(overviewExportData.doTuoiNhanSu, "Độ tuổi");
+      addSheet(overviewExportData.thamNienNhanSu, "Thâm niên");
+      addSheet(overviewExportData.sinhNhatSapToi, "Sắp sinh nhật");
       if(!wb.SheetNames.length){ toast("Không có dữ liệu để xuất", true); return; }
       XLSX.writeFile(wb, `tong_quan_${stamp}.xlsx`);
       toast("Đã xuất file Excel thành công");
@@ -3269,6 +3273,65 @@ async function renderOverview(forceReload){
   const topQt = Object.entries(qtByLoai).sort((a,b)=>b[1]-a[1]).slice(0,6);
   const maxQt = topQt.length ? topQt[0][1] : 1;
 
+  // ---- nhân sự theo vùng miền (qua phòng ban -> vung_mien) ----
+  const pbVung = {}; pbRows.forEach(p => { pbVung[p.phongban_ma] = p.vung_mien || "—"; });
+  const nvByVung = {};
+  nvRows.forEach(nv => { const k = pbVung[nv.phongban_ma] || "—"; nvByVung[k] = (nvByVung[k]||0) + 1; });
+  const topVung = Object.entries(nvByVung).sort((a,b)=>b[1]-a[1]);
+  const maxVung = topVung.length ? topVung[0][1] : 1;
+
+  // ---- phân bố độ tuổi nhân sự (đang làm việc) ----
+  const AGE_BINS_OV = [
+    { label:"Dưới 25", min:0, max:24 },
+    { label:"25 - 30", min:25, max:30 },
+    { label:"31 - 35", min:31, max:35 },
+    { label:"36 - 40", min:36, max:40 },
+    { label:"41 - 45", min:41, max:45 },
+    { label:"Trên 45", min:46, max:999 }
+  ];
+  const todayOv = new Date();
+  const ageCounts = AGE_BINS_OV.map(()=>0);
+  nvRows.filter(nv=>String(nv.tinh_trang||"").toLowerCase().includes("đang")).forEach(nv=>{
+    const d = _parseVnDateFE(nv.ngay_sinh);
+    if(!d) return;
+    let age = todayOv.getFullYear() - d.getFullYear();
+    if(todayOv.getMonth() < d.getMonth() || (todayOv.getMonth()===d.getMonth() && todayOv.getDate() < d.getDate())) age--;
+    const idx = AGE_BINS_OV.findIndex(b => age>=b.min && age<=b.max);
+    if(idx>=0) ageCounts[idx]++;
+  });
+  const maxAge = Math.max(1, ...ageCounts);
+
+  // ---- thâm niên công tác (đang làm việc) ----
+  const TENURE_BINS_OV = [
+    { label:"Dưới 1 năm", min:0, max:0.999 },
+    { label:"1 - 3 năm", min:1, max:2.999 },
+    { label:"3 - 5 năm", min:3, max:4.999 },
+    { label:"5 - 10 năm", min:5, max:9.999 },
+    { label:"Trên 10 năm", min:10, max:999 }
+  ];
+  const tenureCounts = TENURE_BINS_OV.map(()=>0);
+  nvRows.filter(nv=>String(nv.tinh_trang||"").toLowerCase().includes("đang")).forEach(nv=>{
+    const d = _parseVnDateFE(nv.ngay_thu_viec);
+    if(!d) return;
+    const years = (todayOv - d) / (365.25*86400000);
+    const idx = TENURE_BINS_OV.findIndex(b => years>=b.min && years<=b.max);
+    if(idx>=0) tenureCounts[idx]++;
+  });
+  const maxTenure = Math.max(1, ...tenureCounts);
+
+  // ---- sắp sinh nhật (trong N ngày tới, không tính theo năm sinh) ----
+  const BIRTHDAY_WINDOW_DAYS_OV = 30;
+  const upcomingBirthdays = nvRows.filter(nv=>String(nv.tinh_trang||"").toLowerCase().includes("đang")).map(nv=>{
+    const d = _parseVnDateFE(nv.ngay_sinh);
+    if(!d) return null;
+    const todayOnly = new Date(todayOv.getFullYear(), todayOv.getMonth(), todayOv.getDate());
+    let thisYear = new Date(todayOv.getFullYear(), d.getMonth(), d.getDate());
+    let diff = Math.round((thisYear - todayOnly) / 86400000);
+    if(diff < 0) diff += (new Date(todayOv.getFullYear()+1,0,1) - new Date(todayOv.getFullYear(),0,1)) / 86400000;
+    if(diff > BIRTHDAY_WINDOW_DAYS_OV) return null;
+    return { nv, diff };
+  }).filter(Boolean).sort((a,b)=>a.diff-b.diff);
+
   // ---- danh sách ĐẦY ĐỦ (không cắt top 6) để phục vụ xuất Excel ----
   const allPbNhanSu = Object.entries(nvByPb).sort((a,b)=>b[1]-a[1]);
   const allPbCongCu = Object.entries(ccByPb).sort((a,b)=>b[1]-a[1]);
@@ -3310,7 +3373,11 @@ async function renderOverview(forceReload){
     })),
     quaTangLoai: allQtLoai.map(([k,v]) => ({ "Mã quà tặng/đồng phục": k, "Tên quà tặng/đồng phục": qtLoaiName[k]||k, "Số lượt phát": v })),
     chiPhiThang: monthKeys.map((mk,i) => ({ "Tháng": mk, "Chi phí sửa (VNĐ)": chiPhiByMonth[i] })),
-    bienDongNhanSu: monthKeys.map((mk,i) => ({ "Tháng": mk, "Vào làm": vaoByMonth[i], "Nghỉ việc": raByMonth[i] }))
+    bienDongNhanSu: monthKeys.map((mk,i) => ({ "Tháng": mk, "Vào làm": vaoByMonth[i], "Nghỉ việc": raByMonth[i] })),
+    vungMienNhanSu: topVung.map(([k,v]) => ({ "Vùng miền": k, "Số nhân sự": v })),
+    doTuoiNhanSu: AGE_BINS_OV.map((b,i) => ({ "Nhóm tuổi": b.label, "Số nhân sự": ageCounts[i] })),
+    thamNienNhanSu: TENURE_BINS_OV.map((b,i) => ({ "Nhóm thâm niên": b.label, "Số nhân sự": tenureCounts[i] })),
+    sinhNhatSapToi: upcomingBirthdays.map(x => ({ "Mã nhân sự": x.nv.nhanvien_ma, "Họ tên": x.nv.nhanvien_ten, "Ngày sinh": x.nv.ngay_sinh, "Còn (ngày)": x.diff }))
   };
 
   document.getElementById("ovContent").innerHTML = `
@@ -3342,6 +3409,26 @@ async function renderOverview(forceReload){
     <div class="ov-card">
       <div class="ov-card-head"><h3>Quà tặng/Đồng phục phát nhiều nhất</h3><span>Bấm để xem danh sách theo loại quà tặng/đồng phục</span></div>
       ${topQt.map(([k,v]) => barRow(qtLoaiName[k]||k, v, maxQt, `filterBySheetField('qua_tang','ma_qua_tang','${escAttr(k)}','${escAttr(qtLoaiName[k]||k)}')`)).join("") || '<p class="muted">Chưa có dữ liệu</p>'}
+    </div>
+    <div class="ov-card">
+      <div class="ov-card-head"><h3>Nhân sự theo vùng miền</h3><span>Bấm để xem danh sách nhân sự theo vùng miền</span></div>
+      ${topVung.map(([k,v]) => barRow(k, v, maxVung, `filterNhanVienByVungMien('${escAttr(k)}')`)).join("") || '<p class="muted">Chưa có dữ liệu</p>'}
+    </div>
+    <div class="ov-card">
+      <div class="ov-card-head"><h3>Phân bố độ tuổi nhân sự</h3><span>Đang làm việc · bấm để xem danh sách theo nhóm tuổi</span></div>
+      ${AGE_BINS_OV.map((b,i) => barRow(b.label, ageCounts[i], maxAge, `filterNhanVienByAgeBin(${b.min},${b.max},'${escAttr(b.label)}')`)).join("")}
+    </div>
+    <div class="ov-card">
+      <div class="ov-card-head"><h3>Thâm niên công tác</h3><span>Đang làm việc · bấm để xem danh sách theo nhóm thâm niên</span></div>
+      ${TENURE_BINS_OV.map((b,i) => barRow(b.label, tenureCounts[i], maxTenure, `filterNhanVienByTenureBin(${b.min},${b.max},'${escAttr(b.label)}')`)).join("")}
+    </div>
+    <div class="ov-card">
+      <div class="ov-card-head"><h3>Sắp sinh nhật (${BIRTHDAY_WINDOW_DAYS_OV} ngày tới)</h3><span>Bấm vào 1 người để xem chi tiết</span></div>
+      ${upcomingBirthdays.length ? upcomingBirthdays.map(x => `
+        <div class="ov-row" style="cursor:pointer;" onclick="openRecordPanel('nhan_vien','${escAttr(x.nv.nhanvien_ma)}')">
+          <div class="ov-row-top"><span>${escHtml(x.nv.nhanvien_ten)}<span class="ov-arrow">→</span></span><span>${x.diff===0?'Hôm nay':(x.diff===1?'Ngày mai':`Còn ${x.diff} ngày`)}</span></div>
+          <div class="muted" style="font-size:11.5px;">${escHtml(x.nv.ngay_sinh||"—")} · ${escHtml(x.nv.nhanvien_ma)}</div>
+        </div>`).join("") : '<p class="muted">Không có ai sắp sinh nhật trong khoảng thời gian này</p>'}
     </div>
     <div class="ov-card" style="grid-column:1/-1;">
       <div class="ov-card-head"><h3>Chi phí sửa chữa theo tháng (12 tháng gần nhất)</h3><span>Tổng chi phí sửa chữa công cụ dụng cụ mỗi tháng</span></div>
@@ -4373,6 +4460,31 @@ async function filterCongCuByPhongBan(pbMa, pbLabel){
   const nvRows = await apiList("nhan_vien");
   const nvSet = new Set(nvRows.filter(n => n.phongban_ma === pbMa).map(n => n.nhanvien_ma));
   switchSheet("cong_cu", { label:`Phòng ban: ${pbLabel}`, predicate: r => nvSet.has(r.nhanvien_ma) });
+}
+async function filterNhanVienByVungMien(vungMien){
+  const pbRows = await apiList("phong_ban");
+  const pbSet = new Set(pbRows.filter(p => String(p.vung_mien||"—") === String(vungMien)).map(p => p.phongban_ma));
+  switchSheet("nhan_vien", { label:`Vùng miền: ${vungMien}`, predicate: r => pbSet.has(r.phongban_ma) });
+}
+function filterNhanVienByAgeBin(min, max, label){
+  switchSheet("nhan_vien", { label:`Độ tuổi: ${label}`, predicate: r => {
+    if(!String(r.tinh_trang||"").toLowerCase().includes("đang")) return false;
+    const d = _parseVnDateFE(r.ngay_sinh);
+    if(!d) return false;
+    const today = new Date();
+    let age = today.getFullYear() - d.getFullYear();
+    if(today.getMonth() < d.getMonth() || (today.getMonth()===d.getMonth() && today.getDate() < d.getDate())) age--;
+    return age>=min && age<=max;
+  }});
+}
+function filterNhanVienByTenureBin(min, max, label){
+  switchSheet("nhan_vien", { label:`Thâm niên: ${label}`, predicate: r => {
+    if(!String(r.tinh_trang||"").toLowerCase().includes("đang")) return false;
+    const d = _parseVnDateFE(r.ngay_thu_viec);
+    if(!d) return false;
+    const years = (new Date() - d) / (365.25*86400000);
+    return years>=min && years<=max;
+  }});
 }
 async function openRecordPanelHistory(congCuMa){
   await openRecordPanel("cong_cu", congCuMa);
